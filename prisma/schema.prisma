@@ -1,0 +1,606 @@
+// Prisma Schema untuk SADEWA (Sistem Informasi & Pelayanan Desa Pulau Betung)
+// Supports PostgreSQL / Supabase Migration with full type safety
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// 1. MANAJEMEN PENGGUNA & AUTENTIKASI
+model User {
+  id           String    @id @default(cuid())
+  name         String
+  username     String    @unique
+  email        String    @unique
+  passwordHash String
+  salt         String
+  role         String    // super_admin | admin_desa | operator | editor
+  roleTitle    String
+  phone        String?
+  gender       String?   // Laki-laki | Perempuan
+  birthDate    String?
+  isActive            Boolean   @default(true)
+  mustChangePassword  Boolean   @default(true)
+  tokenVersion        Int       @default(1)
+  lastLogin           DateTime?
+  failedLoginCount Int       @default(0)
+  lockoutUntil     DateTime?
+  officialId       String?   @unique
+  permissions      Json?     // Custom module permissions: String[]
+  createdAt        DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+// 2. PROFIL DESA & KONFIGURASI KOP SURAT / IDENTITAS
+model VillageProfile {
+  id                   String   @id @default("default")
+  villageName          String
+  district             String
+  regency              String
+  province             String
+  postalCode           String
+  addressStreet        String?
+  email                String?
+  phone                String?
+  website              String?
+  villageLogoUrl       String?  @db.Text
+  villageLogoSecondaryUrl String? @db.Text
+  regencyLogoUrl       String?  @db.Text
+  sadewaLogoUrl        String?  @db.Text
+  sadewaIconUrl        String?  @db.Text
+  letterCodePrefix     String?
+  motto                String?
+  vision               String   @db.Text
+  mission              Json     // Array string
+  history              String   @db.Text
+  totalPopulation      Int
+  totalFamilies        Int
+  areaSqKm             Float
+  borders              Json     // { north, south, east, west }
+  officeLocation       Json?    // { lat, lng, radius }
+  kadesName            String?
+  kadesNip             String?
+  kadesPhotoUrl        String?  @db.Text
+  kadesGreetingTitle   String?
+  kadesGreeting        String?  @db.Text
+  officialSignatureUrl String?  @db.Text
+  heroTitle            String?
+  heroSubtitle         String?  @db.Text
+  heroBackgroundUrl    String?  @db.Text
+  heroBadgeText        String?
+  heroIsActive         Boolean  @default(true)
+  whatsappCenter       String?
+  operatingHours       Json?    // { weekdays, friday, weekend }
+  emergencyContacts    Json?    // [{ title, phone, desc }]
+  lastUpdated          DateTime @default(now()) @updatedAt
+  updatedBy            String?
+}
+
+// 3. STRUKTUR WILAYAH DUSUN / RW / RT
+model Dusun {
+  id         String     @id @default(cuid())
+  number     Int?
+  customName String?
+  name       String     // e.g. "Dusun 1 Betung Indah"
+  leaderName String?
+  isActive   Boolean    @default(true)
+  rws        RW[]
+  residents  Resident[]
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+}
+
+model RW {
+  id         String     @id @default(cuid())
+  name       String     // e.g. "RW 01"
+  dusunId    String
+  dusun      Dusun      @relation(fields: [dusunId], references: [id], onDelete: Restrict)
+  leaderName String?
+  isActive   Boolean    @default(true)
+  rts        RT[]
+  residents  Resident[]
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+}
+
+model RT {
+  id         String     @id @default(cuid())
+  name       String     // e.g. "RT 01"
+  rwId       String
+  rw         RW         @relation(fields: [rwId], references: [id], onDelete: Restrict)
+  dusunId    String
+  leaderName String?
+  isActive   Boolean    @default(true)
+  residents  Resident[]
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+}
+
+// 4. PELAYANAN SURAT & ADMINISTRASI WARGA
+model VillageService {
+  id             String   @id @default(cuid())
+  name           String
+  category       String   // kependudukan | pertanahan | sosial | usaha | umum | CLASS_A | CLASS_B
+  letterClass    String?  // CLASS_A | CLASS_B
+  allowDownload  Boolean  @default(true)
+  isMultiPage    Boolean  @default(false)
+  pageCount      Int      @default(1)
+  shortName      String?
+  description    String   @db.Text
+  requirements   Json     // String[]
+  procedures     Json     // String[]
+  estimatedDays  String
+  cost           String   @default("Gratis")
+  isActive       Boolean  @default(true)
+  requiredFields Json     // Field configs array
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model ServiceRequest {
+  id                   String   @id @default(cuid())
+  trackingCode         String   @unique
+  serviceId            String
+  serviceName          String
+  citizenName          String
+  citizenNik           String?
+  citizenNikMasked     String
+  phone                String
+  addressDusun         String
+  citizenGender        String?
+  citizenBirthPlace    String?
+  citizenBirthDate     String?
+  dusunId              String?
+  rwId                 String?
+  rtId                 String?
+  requestDate          DateTime @default(now())
+  status               String   // draft | diajukan | diverifikasi | diproses | disetujui | selesai | ditolak
+  notes                String?  @db.Text
+  staffNotes           String?  @db.Text
+  processedBy          String?
+  completedAt          DateTime?
+  fileAttachmentName   String?
+  fileAttachmentUrl    String?
+  ktpAttachmentUrl     String?
+  officialLetterNumber String?  @unique
+  formData             Json?
+  letterheadSnapshot   Json?
+  citizenSnapshot      Json?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([status, createdAt, citizenNikMasked])
+}
+
+model DeletedServiceRequest {
+  id                  String   @id @default(cuid())
+  originalRequestId   String
+  trackingCode        String
+  serviceId           String
+  serviceName         String
+  citizenName         String
+  citizenNikMasked    String
+  phone               String
+  addressDusun        String
+  requestDate         DateTime
+  lastStatus          String
+  deletedAt           DateTime @default(now())
+  deletedByUserName   String
+  deletedByUserRole   String
+  deletionReason      String
+  fullRequestSnapshot Json
+  createdAt           DateTime @default(now())
+}
+
+// 5. PENGADUAN & ASPIRASI WARGA
+model Complaint {
+  id                    String   @id @default(cuid())
+  ticketNumber          String   @unique
+  category              String   // infrastruktur | pelayanan_desa | sosial_bantuan | lingkungan | ketertiban | lainnya
+  title                 String
+  content               String   @db.Text
+  reporterName          String
+  isAnonymous           Boolean  @default(false)
+  reporterContact       String?
+  location              String
+  status                String   // diterima | diverifikasi | diproses | selesai | ditolak
+  adminResponse         String?  @db.Text
+  respondedBy           String?
+  updatedAt             DateTime @updatedAt
+  createdAt             DateTime @default(now())
+  isPublic              Boolean  @default(false)
+  fotoBuktiPenyelesaian String?
+  catatanTindakLanjut   String?  @db.Text
+
+  @@index([status, createdAt])
+}
+
+// 6. DATA KEPENDUDUKAN & SOSIAL (WARGA & BANSOS)
+enum ResidentStatus {
+  HIDUP
+  MENINGGAL
+  PINDAH
+}
+
+enum MutationType {
+  MASUK
+  KELUAR
+}
+
+enum BansosStatus {
+  TERDAFTAR
+  SALUR_SELESAI
+  TERTUNDA
+  GAGAL_SALUR
+}
+
+enum ServiceStatus {
+  DRAFT
+  DIAJUKAN
+  DIVERIFIKASI
+  DIPROSES
+  DISETUJUI
+  SELESAI
+  DITOLAK
+}
+
+enum ComplaintStatus {
+  DITERIMA
+  DIVERIFIKASI
+  DIPROSES
+  SELESAI
+  DITOLAK
+}
+
+model Resident {
+  id               String            @id @default(cuid())
+  nik              String            @unique
+  kkNumber         String
+  fullName         String
+  gender           String            // Laki-laki | Perempuan
+  birthPlace       String
+  birthDate        DateTime
+  religion         String
+  maritalStatus    String
+  education        String
+  occupation       String
+  address          String
+  dusunId          String?
+  dusun            Dusun?            @relation(fields: [dusunId], references: [id], onDelete: Restrict)
+  rwId             String?
+  rw               RW?               @relation(fields: [rwId], references: [id], onDelete: Restrict)
+  rtId             String?
+  rt               RT?               @relation(fields: [rtId], references: [id], onDelete: Restrict)
+  phone            String?
+  status           ResidentStatus    @default(HIDUP)
+  mutationType     MutationType?
+  mutationDate     DateTime?
+  mutationReason   String?
+  hasKus           Boolean           @default(false)
+  isStuntingRisk   Boolean           @default(false)
+  economicStatus   String            @default("Umum")
+  isActive         Boolean           @default(true)
+  bansosRecipients BansosRecipient[]
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+}
+
+model BansosRecipient {
+  id            String       @id @default(cuid())
+  residentId    String
+  resident      Resident     @relation(fields: [residentId], references: [id], onDelete: Restrict)
+  programName   String       // BLT-DD | PKH | BPNT | BST | Bantuan Beras | Lainnya
+  fiscalYear    Int          @default(2026)
+  stageOrMonth  String       // Tahap 1 | Tahap 2 | Tahap 3 | Tahap 4 | Januari | ...
+  nominalAmount Float        @default(0)
+  status        BansosStatus @default(TERDAFTAR)
+  disbursedAt   DateTime?
+  notes         String?      @db.Text
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+}
+
+// 7. PUBLIKASI: BERITA, PENGUMUMAN & AGENDA
+model NewsItem {
+  id          String   @id @default(cuid())
+  title       String
+  slug        String   @unique
+  content     String   @db.Text
+  summary     String   @db.Text
+  category    String   // pemerintahan | pembangunan | kemasyarakatan | budaya | kesehatan | pertanian
+  coverImage  String
+  gallery     Json?    // String[]
+  author      String
+  publishedAt DateTime @default(now())
+  isPublished Boolean  @default(true)
+  views       Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Announcement {
+  id             String   @id @default(cuid())
+  title          String
+  content        String   @db.Text
+  publishedAt    DateTime @default(now())
+  validUntil     DateTime
+  priority       String   @default("normal") // normal | penting | mendesak
+  isActive       Boolean  @default(true)
+  attachmentUrl  String?
+  attachmentName String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model AgendaItem {
+  id          String   @id @default(cuid())
+  title       String
+  description String   @db.Text
+  date        DateTime
+  time        String
+  location    String
+  organizer   String
+  category    String?
+  status      String   @default("akan_datang") // akan_datang | berlangsung | selesai | dibatalkan
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model GalleryItem {
+  id          String   @id @default(cuid())
+  title       String
+  description String   @db.Text
+  category    String   // kegiatan | pembangunan | tradisi | wisata | gotong_royong
+  mediaUrl    String
+  mediaType   String   @default("image") // image | video
+  date        DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// 7. APBDES & TRANSPARANSI ANGGARAN
+model BudgetYearData {
+  id                       String   @id @default(cuid())
+  year                     Int      @unique
+  documentType             String   @default("murni") // murni | perubahan
+  status                   String   @default("BERLAKU") // DRAFT | DIPROSES | DISAHKAN_BPD | BERLAKU
+  legalRefNumber           String?
+  enactmentDate            DateTime?
+  totalIncome              Float
+  totalIncomeRealized      Float    @default(0)
+  totalExpenditure         Float
+  totalExpenditureRealized Float    @default(0)
+  totalFinancing           Float    @default(0)
+  totalFinancingRealized   Float    @default(0)
+  realizationPercentage    Float    @default(0)
+  incomeBreakdown          Json     // Array breakdown
+  expenditureBreakdown     Json     // Array breakdown
+  incomeItems              Json?    // ApbdesItem[]
+  expenditureItems         Json?    // ApbdesItem[]
+  financingItems           Json?    // ApbdesItem[]
+  publicDocuments          Json     // Public documents list
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+}
+
+// 8. PEMBANGUNAN & INFRASTRUKTUR DESA
+model DevelopmentProject {
+  id               String   @id @default(cuid())
+  title            String
+  location         String
+  fiscalYear       Int
+  budget           Float
+  fundingSource    String
+  contractor       String
+  status           String   // perencanaan | proses_lelang | sedang_berjalan | selesai | pemeliharaan
+  progressPercent  Float    @default(0)
+  startDate        DateTime
+  targetEndDate    DateTime
+  description      String   @db.Text
+  beforeImage      String
+  inProgressImage  String
+  completedImage   String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+// 9. POTENSI DESA & UMKM
+model VillagePotential {
+  id               String   @id @default(cuid())
+  name             String
+  category         String   // pertanian | perkebunan | perikanan | pariwisata | kerajinan | energi
+  description      String   @db.Text
+  highlightStat    String
+  imageUrl         String
+  keyCommodities   Json     // String[]
+  keyOpportunities Json?    // String[]
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model UmkmItem {
+  id              String   @id @default(cuid())
+  name            String
+  ownerName       String
+  category        String   // kuliner | kerajinan | hasil_tani | jasa | fashion
+  description     String   @db.Text
+  products        Json     // String[]
+  imageUrl        String
+  location        String
+  whatsappContact String
+  phone           String?
+  priceRange      String?
+  isVerified      Boolean  @default(false)
+  ownerSnapshot   Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// 10. STRUKTUR APARATUR DESA & FASILITAS
+model VillageOfficial {
+  id             String   @id @default(cuid())
+  name           String
+  position       String
+  section        String   // kepala_desa | sekretariat | kasi | kaur | kadus | rt_rw | bpd | lpm | karang_taruna | pkk | posyandu | lainnya
+  nip            String?
+  bio            String   @db.Text
+  imageUrl       String
+  tenure         String
+  phone          String?
+  gender         String?  // Laki-laki | Perempuan
+  birthDate      String?
+  pinHash        String?
+  failedPinAttempts Int     @default(0)
+  lockoutUntil   DateTime?
+  isActive       Boolean  @default(true)
+  displayOrder   Int      @default(0)
+  hasAdminAccess Boolean  @default(false)
+  adminRole      String?  // super_admin | admin_desa | operator | editor
+  adminUsername  String?
+  allowedModules Json?    // String[]
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model MapFacility {
+  id               String   @id @default(cuid())
+  name             String
+  category         String   // kantor_desa | pendidikan | kesehatan | ibadah | infrastruktur | ekonomi | wisata | olahraga | lainnya
+  address          String
+  dusun            String
+  coordinatesLabel String
+  description      String   @db.Text
+  coordinates      Json     // [lat, lng]
+  imageUrl         String?
+  contact          String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+// 11. WEBGIS & SPASIAL PERTANAHAN (PERSIL TANAH & SPORADIK)
+model LandParcel {
+  id                         String   @id @default(cuid())
+  nop                        String   @unique
+  ownerName                  String
+  ownerNik                   String
+  phone                      String?
+  addressDusun               String
+  landUseCategory            String   // PEMUKIMAN | PERKEBUNAN_SAWIT | PERKEBUNAN_KARET | SAWAH_PERTANIAN | FASILITAS_UMUM | PERDAGANGAN_JASA
+  landAreaSqM                Float
+  landAreaHectares           Float
+  buildingAreaSqM            Float
+  coordinates                Json     // [[lat, lng], ...]
+  boundaries                 Json     // LandBoundarySegment[]
+  njopLandPerSqM             Float
+  njopBuildingPerSqM         Float
+  pbbTaxAmount               Float
+  pbbStatus                  String   // LUNAS | BELUM_LUNAS | BEBAS_PAJAK
+  pbbPaymentDate             DateTime?
+  pbbReceiptNumber           String?
+  sporadikStatus             String   // BELUM_TERDAFTAR | DRAF_SURVEI | TERVERIFIKASI | SPORADIK_TERBIT
+  sporadikRequestCode        String?
+  sporadikCertificateNumber  String?
+  sporadikIssuedDate         DateTime?
+  surveyorName               String?
+  witnesses                  Json?    // String[]
+  notes                      String?  @db.Text
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+}
+
+// 12. POSYANDU & MONITORING STUNTING (Z-SCORE WHO)
+model ToddlerRecord {
+  id                   String               @id @default(cuid())
+  nik                  String               @unique
+  name                 String
+  gender               String               // L | P
+  birthDate            DateTime
+  birthWeightKg        Float
+  birthHeightCm        Float
+  parentName           String
+  parentNik            String?
+  parentPhone          String
+  dusunName            String
+  rtRw                 String
+  address              String
+  coordinates          Json                 // [lat, lng]
+  kmsCardNumber        String               @unique
+  isInterventionTarget Boolean              @default(false)
+  measurements         ToddlerMeasurement[]
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+}
+
+model ToddlerMeasurement {
+  id                     String        @id @default(cuid())
+  toddlerId              String
+  toddler                ToddlerRecord @relation(fields: [toddlerId], references: [id], onDelete: Cascade)
+  measurementDate        DateTime
+  ageInMonths            Int
+  weightKg               Float
+  heightCm               Float
+  headCircumferenceCm    Float
+  vitA                   Boolean       @default(false)
+  deworming              Boolean       @default(false)
+  immunizationStatus     String
+  zScoreHeightForAge     Float
+  zScoreWeightForAge     Float
+  zScoreWeightForHeight  Float
+  stuntingCategory       String        // Severely Stunted | Stunted | Normal | Tinggi
+  weightCategory         String        // Gizi Buruk | Gizi Kurang | Normal | Beresiko Lebih | Gizi Lebih | Obesitas
+  overallStatus          String        // Sangat Pendek (Stunting Berat) | Pendek (Stunting) | Gizi Kurang (Wasting) | Normal (Gizi Baik) | Beresiko Obesitas
+  cadreNotes             String?       @db.Text
+  measuredBy             String?
+  createdAt              DateTime      @default(now())
+}
+
+model PosyanduSchedule {
+  id            String   @id @default(cuid())
+  posyanduName  String
+  dusunName     String
+  location      String
+  scheduleDate  DateTime
+  startTime     String
+  endTime       String
+  cadreInCharge String
+  bidanInCharge String
+  notes         String?  @db.Text
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// 13. AUDIT LOG & PRESENSI APARATUR DESA
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String
+  userName  String
+  userRole  String
+  action    String
+  module    String
+  details   String   @db.Text
+  timestamp DateTime @default(now())
+  ipAddress String   @default("127.0.0.1")
+  level     String   @default("info")
+}
+
+model AttendanceLog {
+  id           String   @id @default(cuid())
+  officialId   String
+  officialName String
+  type         String   // masuk | pulang
+  timestamp    DateTime @default(now())
+  date         String   // YYYY-MM-DD
+  location     Json?    // { lat, lng, accuracy }
+  status       String   // hadir | terlambat | pulang_awal | lembur
+  notes        String?  @db.Text
+  deviceId     String?
+  selfieUrl    String?
+  gpsCapturedBy      String @default("client")
+  deviceIdCapturedBy String @default("client")
+  createdAt    DateTime @default(now())
+}

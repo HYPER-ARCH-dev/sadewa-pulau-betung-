@@ -1,0 +1,312 @@
+@import "tailwindcss";
+
+/* =========================================================================
+ * BESPOKE CIVIC-TECH DESIGN SYSTEM UTILITIES & OVERRIDES
+ * ========================================================================= */
+
+@layer utilities {
+  .civic-card {
+    @apply bg-white border border-slate-200/80 rounded-2xl shadow-[0_10px_30px_-5px_rgba(0,0,0,0.03)] transition-all duration-200 hover:shadow-[0_15px_35px_-5px_rgba(0,0,0,0.06)];
+  }
+
+  .civic-card-interactive {
+    @apply bg-white border border-slate-200/80 rounded-2xl shadow-[0_10px_30px_-5px_rgba(0,0,0,0.03)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_15px_35px_-5px_rgba(0,0,0,0.06)] active:scale-[0.99];
+  }
+
+  .civic-button-primary {
+    @apply bg-emerald-700 hover:bg-emerald-800 text-white font-semibold px-4 py-2.5 rounded-xl shadow-[0_4px_12px_rgba(4,120,87,0.2)] transition-all duration-200 hover:-translate-y-0.5 active:scale-[0.98] inline-flex items-center justify-center gap-2 cursor-pointer;
+  }
+
+  .civic-button-secondary {
+    @apply bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 font-semibold px-4 py-2.5 rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.02)] transition-all duration-200 hover:-translate-y-0.5 active:scale-[0.98] inline-flex items-center justify-center gap-2 cursor-pointer;
+  }
+
+  .civic-badge-label {
+    @apply text-xs font-semibold uppercase tracking-wider text-slate-500;
+  }
+}
+
+/* Ensure all input, select, and textarea elements have high-contrast text and placeholder colors */
+input, select, textarea {
+  color: #0f172a !important;
+}
+input::placeholder, textarea::placeholder {
+  color: #94a3b8 !important;
+}
+
+/* 
+ * =========================================================================
+ * PRINT ISOLATION RULES FOR OFFICIAL LETTER (A4 210mm x 297mm)
+ * =========================================================================
+ * Guarantees that when printing / downloading official letters:
+ * - Entire website UI (#root, nav, headers, sidebars, dashboard, footers,
+ *   cards, status/tracking, AI assistant bubble, toasts, buttons) are 100% hidden.
+ * - Only the authentic A4 letter document sheet (#official-letter-printable) prints.
+ */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 8mm 12mm 10mm 12mm;
+  }
+
+  html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif !important;
+    font-size: 11pt !important;
+    line-height: 1.5 !important;
+  }
+
+  /* When the official letter modal is active, completely remove all website UI elements */
+  body.letter-modal-active #root,
+  body.letter-modal-active header,
+  body.letter-modal-active nav,
+  body.letter-modal-active footer,
+  body.letter-modal-active aside,
+  body.letter-modal-active .no-print,
+  body.letter-modal-active #ai-assistant-bubble,
+  body.letter-modal-active .toast-container,
+  .print-hidden,
+  .print\:hidden {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    width: 0 !important;
+    overflow: hidden !important;
+  }
+
+  /* Display only the isolated official letter portal */
+  body.letter-modal-active #official-letter-portal {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  /* Force modal backdrop and card to flatten into clean paper */
+  body.letter-modal-active .official-letter-overlay {
+    position: static !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    inset: auto !important;
+    display: block !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    overflow: visible !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  body.letter-modal-active .official-letter-card {
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: transparent !important;
+    overflow: visible !important;
+  }
+
+  /* Dedicated sheet sizing for A4 output */
+  #official-letter-printable {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+  }
+
+  /* Multi-page letter bundle support (e.g. Model N1-N4) & single-page standard letters */
+  .official-letter-page-item,
+  .official-letter-sheet {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    min-height: 270mm !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: space-between !important;
+  }
+
+  .official-letter-page-item {
+    page-break-after: always !important;
+    break-after: page !important;
+  }
+
+  .official-letter-page-item:last-child {
+    page-break-after: auto !important;
+    break-after: auto !important;
+  }
+
+  /* Remove all print action bars & buttons */
+  .official-letter-actionbar,
+  .official-letter-footer-bar,
+  button {
+    display: none !important;
+  }
+
+  /* 
+   * =========================================================================
+   * PRINT ISOLATION RULES FOR KARTU KIA (KESEHATAN IBU DAN ANAK & KMS)
+   * =========================================================================
+   */
+  body.kia-modal-active {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  body.kia-modal-active #root,
+  body.kia-modal-active header,
+  body.kia-modal-active nav,
+  body.kia-modal-active footer,
+  body.kia-modal-active aside,
+  body.kia-modal-active .no-print,
+  body.kia-modal-active #ai-assistant-bubble,
+  body.kia-modal-active .toast-container,
+  body.kia-modal-active > *:not(#kia-card-portal) {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    width: 0 !important;
+    overflow: hidden !important;
+  }
+
+  body.kia-modal-active #kia-card-portal {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+    overflow: visible !important;
+  }
+
+  body.kia-modal-active #kia-card-printable {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  body.kia-modal-active #kia-card-printable * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* 
+   * =========================================================================
+   * PRINT ISOLATION RULES FOR RESI BANTUAN SOSIAL (KPM BANSOS)
+   * =========================================================================
+   */
+  body.bansos-receipt-active {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  body.bansos-receipt-active header,
+  body.bansos-receipt-active nav,
+  body.bansos-receipt-active footer,
+  body.bansos-receipt-active aside,
+  body.bansos-receipt-active .no-print,
+  body.bansos-receipt-active #ai-assistant-bubble,
+  body.bansos-receipt-active .toast-container,
+  body.bansos-receipt-active button {
+    display: none !important;
+  }
+
+  body.bansos-receipt-active #bansos-receipt-modal-backdrop,
+  body.bansos-receipt-active #bansos-batch-print-modal-backdrop {
+    position: static !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    inset: auto !important;
+    display: block !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    overflow: visible !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  body.bansos-receipt-active #printable-bansos-receipt-card,
+  body.bansos-receipt-active #printable-bansos-batch-area {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 auto !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    border: none !important;
+    box-shadow: none !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
+
+/* Luxury UI Animations */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.animate-shimmer {
+  background-size: 200% auto;
+  animation: shimmer 6s linear infinite;
+}
+
+@keyframes shine {
+  0% { transform: translateX(-100%) skewX(-20deg); }
+  50% { transform: translateX(200%) skewX(-20deg); }
+  100% { transform: translateX(200%) skewX(-20deg); }
+}
+
+.animate-shine {
+  animation: shine 4s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}

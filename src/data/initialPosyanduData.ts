@@ -1,0 +1,262 @@
+import { ToddlerRecord, PosyanduSchedule } from '../types/posyandu';
+import { calculateAgeInMonths, calculateZScoreHeightForAge, calculateZScoreWeightForAge, calculateZScoreWeightForHeight, evaluateOverallStatus } from '../utils/whoZScoreCalculator';
+
+// Tanggal rujukan sampel: September 2026
+const SAMPLE_MEASURE_DATE = '2026-09-05';
+
+export const INITIAL_TODDLERS: ToddlerRecord[] = [
+  {
+    id: 'T-001',
+    nik: '1504014502240001',
+    name: 'Muhammad Aris Pratama',
+    gender: 'L',
+    birthDate: '2024-02-15',
+    birthWeightKg: 3.1,
+    birthHeightCm: 49.0,
+    parentName: 'Siti Aminah & Rahmad',
+    parentPhone: '0821-7890-1234',
+    dusunName: 'Dusun 1',
+    rtRw: 'RT 02 / RW 01',
+    address: 'Jl. Pemuda No. 12, RT 02 Dusun 1',
+    coordinates: [-1.6052, 103.3512],
+    kmsCardNumber: 'KIA-PB-2024-001',
+    isInterventionTarget: true,
+    measurements: [
+      {
+        id: 'M-001-1',
+        toddlerId: 'T-001',
+        measurementDate: '2026-07-05',
+        ageInMonths: 28,
+        weightKg: 10.2,
+        heightCm: 81.5,
+        headCircumferenceCm: 46.5,
+        vitA: true,
+        deworming: true,
+        immunizationStatus: 'Lengkap',
+        zScoreHeightForAge: -2.85,
+        zScoreWeightForAge: -2.10,
+        zScoreWeightForHeight: -0.95,
+        stuntingCategory: 'Stunted',
+        weightCategory: 'Gizi Kurang',
+        overallStatus: 'Pendek (Stunting)',
+        cadreNotes: 'Perlu konseling asupan protein hewani (Telur & Ikan). Diberi PMT Biskuit & Telur.',
+        measuredBy: 'Bidan Nining, S.Tr.Keb'
+      },
+      {
+        id: 'M-001-2',
+        toddlerId: 'T-001',
+        measurementDate: SAMPLE_MEASURE_DATE,
+        ageInMonths: 30,
+        weightKg: 10.6,
+        heightCm: 82.8,
+        headCircumferenceCm: 47.0,
+        vitA: true,
+        deworming: true,
+        immunizationStatus: 'Lengkap',
+        zScoreHeightForAge: -2.86,
+        zScoreWeightForAge: -2.08,
+        zScoreWeightForHeight: -0.82,
+        stuntingCategory: 'Stunted',
+        weightCategory: 'Gizi Kurang',
+        overallStatus: 'Pendek (Stunting)',
+        cadreNotes: 'Tinggi badan naik 1.3cm. Lanjutkan pemberian PMT telur 2 butir/hari.',
+        measuredBy: 'Kader Posyandu Melati 1'
+      }
+    ]
+  },
+  {
+    id: 'T-002',
+    nik: '1504015809230002',
+    name: 'Aisyah Humaira',
+    gender: 'P',
+    birthDate: '2023-09-18',
+    birthWeightKg: 2.8,
+    birthHeightCm: 48.0,
+    parentName: 'Nurhayati & Ismail',
+    parentPhone: '0813-6745-9012',
+    dusunName: 'Dusun 2',
+    rtRw: 'RT 05 / RW 02',
+    address: 'RT 05 Dusun 2',
+    coordinates: [-1.6085, 103.3548],
+    kmsCardNumber: 'KIA-PB-2023-089',
+    isInterventionTarget: true,
+    measurements: [
+      {
+        id: 'M-002-1',
+        toddlerId: 'T-002',
+        measurementDate: SAMPLE_MEASURE_DATE,
+        ageInMonths: 35,
+        weightKg: 10.8,
+        heightCm: 82.0,
+        headCircumferenceCm: 46.0,
+        vitA: true,
+        deworming: true,
+        immunizationStatus: 'Lengkap',
+        zScoreHeightForAge: -3.64,
+        zScoreWeightForAge: -2.00,
+        zScoreWeightForHeight: -0.15,
+        stuntingCategory: 'Severely Stunted',
+        weightCategory: 'Normal',
+        overallStatus: 'Sangat Pendek (Stunting Berat)',
+        cadreNotes: 'Kategori Stunting Berat. Dirujuk ke Puskesmas Pemayung untuk pemeriksaan dokter spesialis anak & BPD TPK.',
+        measuredBy: 'Bidan Nining, S.Tr.Keb'
+      }
+    ]
+  },
+  {
+    id: 'T-003',
+    nik: '1504011201250003',
+    name: 'Fathan Al-Ghazali',
+    gender: 'L',
+    birthDate: '2025-01-12',
+    birthWeightKg: 3.3,
+    birthHeightCm: 50.0,
+    parentName: 'Rina Marlina & Budi',
+    parentPhone: '0852-1122-3344',
+    dusunName: 'Dusun 1',
+    rtRw: 'RT 01 / RW 01',
+    address: 'Dusun 1 RT 01',
+    coordinates: [-1.6035, 103.3490],
+    kmsCardNumber: 'KIA-PB-2025-014',
+    isInterventionTarget: false,
+    measurements: [
+      {
+        id: 'M-003-1',
+        toddlerId: 'T-003',
+        measurementDate: SAMPLE_MEASURE_DATE,
+        ageInMonths: 19,
+        weightKg: 11.2,
+        heightCm: 83.5,
+        headCircumferenceCm: 47.8,
+        vitA: true,
+        deworming: false,
+        immunizationStatus: 'Lengkap DPT 3 + Polio 4',
+        zScoreHeightForAge: 0.42,
+        zScoreWeightForAge: 0.25,
+        zScoreWeightForHeight: 0.20,
+        stuntingCategory: 'Normal',
+        weightCategory: 'Normal',
+        overallStatus: 'Normal (Gizi Baik)',
+        cadreNotes: 'Pertumbuhan ideal dan nafsu makan baik. ASI Eksklusif dilanjutkan MP-ASI kaya nutrisi.',
+        measuredBy: 'Kader Posyandu Melati 1'
+      }
+    ]
+  },
+  {
+    id: 'T-004',
+    nik: '1504016511240004',
+    name: 'Khadijah Az-Zahra',
+    gender: 'P',
+    birthDate: '2024-11-25',
+    birthWeightKg: 3.0,
+    birthHeightCm: 48.5,
+    parentName: 'Dewi Sartika & Ahmad',
+    parentPhone: '0822-9876-5432',
+    dusunName: 'Dusun 3',
+    rtRw: 'RT 07 / RW 03',
+    address: 'RT 07 Dusun 3',
+    coordinates: [-1.6020, 103.3580],
+    kmsCardNumber: 'KIA-PB-2024-112',
+    isInterventionTarget: false,
+    measurements: [
+      {
+        id: 'M-004-1',
+        toddlerId: 'T-004',
+        measurementDate: SAMPLE_MEASURE_DATE,
+        ageInMonths: 21,
+        weightKg: 10.4,
+        heightCm: 82.0,
+        headCircumferenceCm: 46.8,
+        vitA: true,
+        deworming: false,
+        immunizationStatus: 'Lengkap',
+        zScoreHeightForAge: -0.95,
+        zScoreWeightForAge: -0.35,
+        zScoreWeightForHeight: -0.10,
+        stuntingCategory: 'Normal',
+        weightCategory: 'Normal',
+        overallStatus: 'Normal (Gizi Baik)',
+        cadreNotes: 'Tumbuh kembang baik. Rutin hadir timbang di Posyandu Melati 3.',
+        measuredBy: 'Kader Posyandu Melati 3'
+      }
+    ]
+  },
+  {
+    id: 'T-005',
+    nik: '1504012004240005',
+    name: 'Rayyan Malik Al-Fatih',
+    gender: 'L',
+    birthDate: '2024-04-20',
+    birthWeightKg: 2.9,
+    birthHeightCm: 48.0,
+    parentName: 'Fitriani & Zulkifli',
+    parentPhone: '0812-3344-5566',
+    dusunName: 'Dusun 2',
+    rtRw: 'RT 04 / RW 02',
+    address: 'RT 04 Dusun 2',
+    coordinates: [-1.6072, 103.3530],
+    kmsCardNumber: 'KIA-PB-2024-045',
+    isInterventionTarget: true,
+    measurements: [
+      {
+        id: 'M-005-1',
+        toddlerId: 'T-005',
+        measurementDate: SAMPLE_MEASURE_DATE,
+        ageInMonths: 28,
+        weightKg: 10.1,
+        heightCm: 81.2,
+        headCircumferenceCm: 46.2,
+        vitA: true,
+        deworming: true,
+        immunizationStatus: 'Belum Lengkap',
+        zScoreHeightForAge: -2.95,
+        zScoreWeightForAge: -2.18,
+        zScoreWeightForHeight: -0.80,
+        stuntingCategory: 'Stunted',
+        weightCategory: 'Gizi Kurang',
+        overallStatus: 'Pendek (Stunting)',
+        cadreNotes: 'Perlu pendampingan sanitasi air bersih dan PMT protein hewani ikan patin/baung lokal.',
+        measuredBy: 'Bidan Nining, S.Tr.Keb'
+      }
+    ]
+  }
+];
+
+export const INITIAL_POSYANDU_SCHEDULES: PosyanduSchedule[] = [
+  {
+    id: 'POS-01',
+    posyanduName: 'Posyandu Melati 1 (Dusun 1)',
+    dusunName: 'Dusun 1',
+    location: 'Poskesdes Dusun 1',
+    scheduleDate: '2026-09-15',
+    startTime: '08:30',
+    endTime: '11:30',
+    cadreInCharge: 'Ibu Rahma & Kader Melati 1',
+    bidanInCharge: 'Bidan Nining, S.Tr.Keb',
+    notes: 'Penimbangan rutin, Vitamin A, dan Pembagian PMT Sup Ikan Patin & Telur Rebus'
+  },
+  {
+    id: 'POS-02',
+    posyanduName: 'Posyandu Melati 2 (Dusun 2)',
+    dusunName: 'Dusun 2',
+    location: 'Balai Dusun 2',
+    scheduleDate: '2026-09-17',
+    startTime: '08:30',
+    endTime: '11:30',
+    cadreInCharge: 'Ibu Maryam & Kader Melati 2',
+    bidanInCharge: 'Bidan Nining, S.Tr.Keb',
+    notes: 'Pemeriksaan Tumbuh Kembang, Pemberian Obat Cacing, dan Konseling Stunting TPK'
+  },
+  {
+    id: 'POS-03',
+    posyanduName: 'Posyandu Melati 3 (Dusun 3)',
+    dusunName: 'Dusun 3',
+    location: 'Posyandu Terpadu Dusun 3',
+    scheduleDate: '2026-09-20',
+    startTime: '09:00',
+    endTime: '12:00',
+    cadreInCharge: 'Ibu Yuliana & Kader Melati 3',
+    bidanInCharge: 'Bidan Suprihatin, A.Md.Keb',
+    notes: 'Imunisasi Rutin Balita, Pengukuran Lingkar Kepala, dan Penyuluhan MP-ASI Gizi Seimbang'
+  }
+];

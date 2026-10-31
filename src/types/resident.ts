@@ -1,0 +1,36 @@
+export interface Resident {
+  id?: string;
+  nik: string;
+  kk: string;
+  kkNumber?: string;
+  name: string;
+  fullName?: string;
+  gender: 'Laki-laki' | 'Perempuan';
+  birthDate: string;
+  birthPlace: string;
+  address: string;
+  dusun: string;
+  dusunId?: string;
+  rt: string;
+  rw: string;
+  religion: string;
+  maritalStatus: string;
+  occupation: string;
+  education: string;
+  status: 'Hidup' | 'Meninggal' | 'Pindah';
+  mutationType?: 'Masuk' | 'Keluar';
+  hasBansos?: boolean;
+  hasSku?: boolean;
+  hasSktm?: boolean;
+  isStuntingRisk?: boolean;
+  hasLetterHistory?: boolean;
+  hasToddler?: boolean;
+  hasComplaint?: boolean;
+  phone?: string;
+  bansosList?: Array<{ id: string; programName: string; criteria?: string; year: number; stage?: string; nominal?: number; disbursementStatus?: string }>;
+  serviceList?: Array<{ id: string; trackingCode: string; serviceName: string; status: string; requestDate: string }>;
+  toddlerList?: Array<{ id: string; nik: string; name: string; isInterventionTarget?: boolean; kmsCardNumber?: string; birthDate: string }>;
+  complaintList?: Array<{ id: string; ticketNumber: string; title: string; category?: string; status: string; createdAt: string }>;
+  economicStatus?: 'Penerima Bantuan' | 'UMKM Transisi' | 'Mandiri / Pengusaha' | 'Umum';
+  updatedAt: string;
+}

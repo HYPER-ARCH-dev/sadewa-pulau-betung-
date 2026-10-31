@@ -1,0 +1,8 @@
+{
+  "name": "SADEWA Digital Village",
+  "description": "The next generation of digital village services. Integrated Administration, Transparency, and Community Empowerment Portal.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -1,0 +1,17 @@
+node_modules/
+# build/ and dist/ unignored for deployment artifact upload
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Data Backups (FIX 5)
+backups/
+data/*.json
+data/*.pre-etl-backup
+backup_*.json
+
+# Uploads (FIX 5)
+public/uploads/
+uploads/

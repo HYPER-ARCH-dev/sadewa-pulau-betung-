@@ -12,6 +12,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
+import { getPrisma as getSharedPrisma } from '../prisma-helpers';
 
 export type TransactionClient = Omit<PrismaClient, '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'>;
 
@@ -60,20 +61,20 @@ import {
   BANSOS_STATUS_MAP
 } from '../../utils/statusNormalizer';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
-const SYNC_HASH_FILE = path.join(DATA_DIR, 'sync-hashes.json');
-const SYNC_FAILURES_FILE = path.join(DATA_DIR, 'sync-failures.json');
-const LOG_DIR = path.join(process.cwd(), 'logs');
-const FAIL_LOG = path.join(LOG_DIR, 'dual-write-failures.log');
+import { STORAGE_PATHS } from '../../config/storageRegistry';
+
+const DATA_DIR = STORAGE_PATHS.DATA_DIR;
+const SYNC_HASH_FILE = STORAGE_PATHS.SYNC_HASH_FILE;
+const SYNC_FAILURES_FILE = STORAGE_PATHS.SYNC_FAILURES_FILE;
+const LOG_DIR = STORAGE_PATHS.LOGS_DIR;
+const FAIL_LOG = STORAGE_PATHS.FAIL_LOG_FILE;
 const MAX_LOG_SIZE = 10 * 1024 * 1024; // 10 Megabytes
 
-let prismaInstance: PrismaClient | null = null;
-
 export function getPrismaClient(): PrismaClient | null {
-  if (!prismaInstance && process.env.DATABASE_URL && process.env.MIGRATION_PHASE !== 'PHASE_1_JSON_ONLY') {
-    prismaInstance = new PrismaClient();
+  if (process.env.DATABASE_URL && process.env.MIGRATION_PHASE !== 'PHASE_1_JSON_ONLY') {
+    return getSharedPrisma();
   }
-  return prismaInstance;
+  return null;
 }
 
 // 1. HASH-BASED CHANGE DETECTION

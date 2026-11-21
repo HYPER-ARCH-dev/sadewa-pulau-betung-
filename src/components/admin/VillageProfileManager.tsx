@@ -147,8 +147,7 @@ export const VillageProfileManager: React.FC = () => {
 
     setUploadingTarget(target);
     try {
-      // Menggunakan utilitas uploadImageService (Future-Proof: Backend Server atau Fallback Base64 Lokal)
-      const result = await uploadImageService(file);
+      const result = await uploadImageService(file, { module: 'village-profile' });
 
       if (result.success && result.url) {
         const resolvedUrl = result.url;

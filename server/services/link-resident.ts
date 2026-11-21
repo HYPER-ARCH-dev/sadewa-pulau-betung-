@@ -7,14 +7,10 @@
  */
 
 import { PrismaClient } from '@prisma/client';
+import { getPrisma as getSharedPrisma } from '../db/prisma-helpers';
 
-let prismaClient: PrismaClient | null = null;
-
-function getPrisma() {
-  if (!prismaClient) {
-    prismaClient = new PrismaClient();
-  }
-  return prismaClient;
+function getPrisma(): PrismaClient {
+  return getSharedPrisma();
 }
 
 export interface LinkResult {

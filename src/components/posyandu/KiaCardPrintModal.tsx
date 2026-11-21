@@ -78,7 +78,7 @@ export const KiaCardPrintModal: React.FC<KiaCardPrintModalProps> = ({
 
     setIsUploadingLogo(true);
     try {
-      const res = await uploadImageService(file);
+      const res = await uploadImageService(file, { module: 'posyandu-kia' });
       if (res.success && res.url) {
         await updateVillageProfile({ 
           settings: { 

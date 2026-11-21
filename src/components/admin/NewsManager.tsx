@@ -133,7 +133,7 @@ export const NewsManager: React.FC = () => {
     setUploadError('');
 
     try {
-      const result = await uploadImageService(file);
+      const result = await uploadImageService(file, { module: 'news' });
       if (result.success && result.url) {
         setCoverImage(result.url);
         if (result.isLocalFallback) {

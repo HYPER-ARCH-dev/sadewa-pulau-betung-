@@ -183,7 +183,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLoading, setIsLoading] = useState(true);
 
   const { serviceRequests, setServiceRequests, deletedRequests, setDeletedRequests, addServiceRequest, updateServiceRequest, deleteServiceRequest: fbDeleteServiceRequest, findRequestByCode } = useServiceRequests();
-  const [currentUser, setCurrentUser] = useState<User | null>(() => loadStored('current_user', null));
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('pulau_betung_auth_token') : null;
+    if (!token) {
+      if (typeof window !== 'undefined') localStorage.removeItem('pulau_betung_current_user');
+      return null;
+    }
+    return loadStored('current_user', null);
+  });
   const [users, setUsers] = useState<User[]>([]);
   const [services, setServices] = useState<VillageService[]>(INITIAL_SERVICES);
   
@@ -241,24 +248,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return userLikedItems.includes(id);
   }, [userLikedItems]);
 
-  // Fetch Village Profile from API on Mount
+  // Fetch Bansos KPM data on Mount (public endpoint unless logged in with admin/operator role)
   useEffect(() => {
-    const fetchProfile = async () => {
-      try {
-        const res = await api.getVillageProfile();
-        if (res.success && res.data) {
-          setVillageProfile(res.data);
-        }
-      } catch (err) {
-        console.error('Error fetching village profile from API:', err);
-      }
-    };
-    fetchProfile();
-
     const fetchBansos = async () => {
       try {
         const token = localStorage.getItem('pulau_betung_auth_token');
-        const res = token ? await api.getKpmData() : await api.getPublicKpmData();
+        const storedUser = token ? loadStored<User | null>('current_user', null) : null;
+        const canAccessAdminKpm = Boolean(
+          token && storedUser && ['super_admin', 'admin_desa', 'operator'].includes(storedUser.role)
+        );
+        const res = canAccessAdminKpm ? await api.getKpmData() : await api.getPublicKpmData();
         if (res.success && Array.isArray(res.data) && res.data.length > 0) {
           setBansosRecipients(res.data);
         }
@@ -296,7 +295,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Sinkronisasi ke local storage (Hanya Session & User Preferences)
   useEffect(() => {
-    saveStored('current_user', currentUser);
+    if (currentUser) {
+      saveStored('current_user', currentUser);
+    } else if (typeof window !== 'undefined') {
+      localStorage.removeItem('pulau_betung_current_user');
+    }
     saveStored('user_liked_items', userLikedItems);
     
     // NOTE: Data operasional desa (News, Requests, dll) tidak lagi disimpan di LocalStorage
@@ -464,20 +467,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (bootstrap.gallery?.length > 0) setGallery(bootstrap.gallery);
         if (bootstrap.territories && bootstrap.territories.length > 0) setTerritories(bootstrap.territories);
         if (bootstrap.profile) setVillageProfile((prev) => ({ ...prev, ...bootstrap.profile }));
-        
-        // Load WebGIS Data
-        try {
-          const gisRes = await api.getLandParcels();
-          if (gisRes.success && gisRes.data) {
-            setWebGisData(gisRes.data);
-          }
-        } catch (gisErr) {
-          console.warn('Gagal memuat data WebGIS dari server:', gisErr);
-        }
       }
 
       const token = localStorage.getItem('pulau_betung_auth_token');
-      if (token) {
+      if (!token) {
+        setCurrentUser(null);
+        localStorage.removeItem('pulau_betung_current_user');
+      } else {
         try {
           const me = await api.getCurrentUser(token);
           if (me) {
@@ -487,53 +483,70 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
               if (prev.id !== me.id) return me;
               return { ...prev, ...me };
             });
-            const logs = await api.getAuditLogs();
-            if (logs?.length > 0) setAuditLogs(logs);
 
-            // Sync service requests from server database
-            try {
-              const serverReqs = await api.getAdminRequests();
-              if (serverReqs.success && Array.isArray(serverReqs.data) && serverReqs.data.length > 0) {
-                setServiceRequests((prev: ServiceRequest[]) => {
-                  const serverMap = new Map((serverReqs.data || []).map((r: ServiceRequest) => [r.id, r]));
-                  (serverReqs.data || []).forEach((r: ServiceRequest) => {
-                    if (r.trackingCode) serverMap.set(r.trackingCode, r);
-                  });
-                  const merged = prev.map((local: ServiceRequest) => {
-                    const s = serverMap.get(local.id) || (local.trackingCode ? serverMap.get(local.trackingCode) : undefined);
-                    return s ? { ...local, ...s } : local;
-                  });
-                  const localIds = new Set(prev.map((r: ServiceRequest) => r.id));
-                  const localCodes = new Set(prev.map((r: ServiceRequest) => r.trackingCode));
-                  (serverReqs.data || []).forEach((sr: ServiceRequest) => {
-                    if (!localIds.has(sr.id) && !localCodes.has(sr.trackingCode)) {
-                      merged.unshift(sr);
-                    }
-                  });
-                  return merged;
-                });
-              }
-            } catch (reqSyncErr) {
-              console.warn('Admin requests sync notice:', reqSyncErr);
+            if (['super_admin', 'admin_desa'].includes(me.role)) {
+              const logs = await api.getAuditLogs();
+              if (logs?.length > 0) setAuditLogs(logs);
             }
 
-            // Sync deleted service requests log from server
-            try {
-              const delRes = await api.getDeletedServiceRequests();
-              if (delRes.success && Array.isArray(delRes.data)) {
-                setDeletedRequests(delRes.data);
+            if (['super_admin', 'admin_desa', 'operator', 'editor'].includes(me.role)) {
+              try {
+                const gisRes = await api.getLandParcels();
+                if (gisRes.success && gisRes.data) {
+                  setWebGisData(gisRes.data);
+                }
+              } catch (gisErr) {
+                console.warn('Gagal memuat data WebGIS dari server:', gisErr);
               }
-            } catch (delErr) {
-              console.warn('Deleted requests sync notice:', delErr);
+            }
+
+            if (['super_admin', 'admin_desa', 'operator'].includes(me.role)) {
+              // Sync service requests from server database
+              try {
+                const serverReqs = await api.getAdminRequests();
+                if (serverReqs.success && Array.isArray(serverReqs.data) && serverReqs.data.length > 0) {
+                  setServiceRequests((prev: ServiceRequest[]) => {
+                    const serverMap = new Map((serverReqs.data || []).map((r: ServiceRequest) => [r.id, r]));
+                    (serverReqs.data || []).forEach((r: ServiceRequest) => {
+                      if (r.trackingCode) serverMap.set(r.trackingCode, r);
+                    });
+                    const merged = prev.map((local: ServiceRequest) => {
+                      const s = serverMap.get(local.id) || (local.trackingCode ? serverMap.get(local.trackingCode) : undefined);
+                      return s ? { ...local, ...s } : local;
+                    });
+                    const localIds = new Set(prev.map((r: ServiceRequest) => r.id));
+                    const localCodes = new Set(prev.map((r: ServiceRequest) => r.trackingCode));
+                    (serverReqs.data || []).forEach((sr: ServiceRequest) => {
+                      if (!localIds.has(sr.id) && !localCodes.has(sr.trackingCode)) {
+                        merged.unshift(sr);
+                      }
+                    });
+                    return merged;
+                  });
+                }
+              } catch (reqSyncErr) {
+                console.warn('Admin requests sync notice:', reqSyncErr);
+              }
+
+              // Sync deleted service requests log from server
+              try {
+                const delRes = await api.getDeletedServiceRequests();
+                if (delRes.success && Array.isArray(delRes.data)) {
+                  setDeletedRequests(delRes.data);
+                }
+              } catch (delErr) {
+                console.warn('Deleted requests sync notice:', delErr);
+              }
             }
           } else {
             // Only logout if we are absolutely sure the session is invalid
-            // (e.g. server explicitly returned 401/404, not just a network error)
+            // (e.g. server explicitly returned 401/403, not just a network error)
             const checkRes = await fetch('/api/auth/me', { headers: { 'Authorization': `Bearer ${token}` } }).catch(() => null);
             if (checkRes && (checkRes.status === 401 || checkRes.status === 403)) {
               console.warn('Sesi tidak valid, mengeluarkan pengguna.');
               setCurrentUser(null);
               localStorage.removeItem('pulau_betung_auth_token');
+              localStorage.removeItem('pulau_betung_current_user');
             }
           }
         } catch (meErr) {

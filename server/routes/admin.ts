@@ -4,10 +4,11 @@ import path from 'path';
 import crypto from 'crypto';
 import { getPrisma, recordAuditLogDb } from '../db/prisma-helpers';
 import { seedInitialData } from '../db/database';
-import { authenticateToken, requireRoles, AuthenticatedRequest, verifyPassword } from '../auth';
+import { authenticateToken, requireRoles, AuthenticatedRequest, verifyPassword, hashPassword, generateSalt, createToken } from '../auth';
 import { assignServerLetterNumberAtomic } from '../services/letterNumbering';
 import { clearSupabaseStorageBucket } from './upload';
 import { SERVER_CONFIG } from '../config/constants';
+import { getStorageArchitectureSummary } from '../config/storageRegistry';
 
 const router = Router();
 
@@ -553,8 +554,8 @@ router.post('/users', requireRoles('super_admin', 'admin_desa'), async (req: Aut
     });
     if (existing) return res.status(400).json({ success: false, error: 'Username atau email sudah terdaftar.' });
 
-    const salt = crypto.randomBytes(16).toString('hex');
-    const passwordHash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
+    const salt = generateSalt();
+    const passwordHash = hashPassword(password, salt);
 
     const cleanOfficialId = officialId && String(officialId).trim().length > 0 ? String(officialId).trim() : null;
 
@@ -569,7 +570,21 @@ router.post('/users', requireRoles('super_admin', 'admin_desa'), async (req: Aut
         roleTitle: roleTitle || 'Operator',
         officialId: cleanOfficialId,
         permissions: permissions || [],
-        isActive: true
+        isActive: true,
+        mustChangePassword: false
+      },
+      select: {
+        id: true,
+        name: true,
+        username: true,
+        email: true,
+        role: true,
+        roleTitle: true,
+        isActive: true,
+        officialId: true,
+        permissions: true,
+        lastLogin: true,
+        createdAt: true
       }
     });
 
@@ -627,7 +642,21 @@ router.put('/users/:id', requireRoles('super_admin', 'admin_desa'), async (req: 
         roleTitle,
         officialId: cleanOfficialId,
         permissions: permissions || undefined,
-        isActive: isActive !== undefined ? isActive : undefined
+        isActive: isActive !== undefined ? isActive : undefined,
+        ...(isActive === false ? { tokenVersion: { increment: 1 } } : {})
+      },
+      select: {
+        id: true,
+        name: true,
+        username: true,
+        email: true,
+        role: true,
+        roleTitle: true,
+        isActive: true,
+        officialId: true,
+        permissions: true,
+        lastLogin: true,
+        createdAt: true
       }
     });
 
@@ -693,7 +722,7 @@ router.delete('/users/:id', requireRoles('super_admin', 'admin_desa'), async (re
   }
 });
 
-// 2b. User Password Management (FIX: Added missing password change route)
+// 2b. User Password Management (FIXED: uses scryptSync matching login + RBAC + tokenVersion revocation)
 router.put('/users/:id/password', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
@@ -704,15 +733,35 @@ router.put('/users/:id/password', requireRoles('super_admin', 'admin_desa'), asy
       return res.status(400).json({ success: false, error: 'Password minimal 6 karakter.' });
     }
 
-    // Hash password baru
-    const salt = crypto.randomBytes(16).toString('hex');
-    const passwordHash = crypto.pbkdf2Sync(newPassword, salt, 1000, 64, 'sha512').toString('hex');
+    const targetUser = await prisma.user.findUnique({ where: { id } });
+    if (!targetUser) {
+      return res.status(404).json({ success: false, error: 'Pengguna tidak ditemukan.' });
+    }
 
-    // Update user record
-    await prisma.user.update({
+    if (targetUser.role === 'super_admin' && req.user?.role !== 'super_admin') {
+      return res.status(403).json({ success: false, error: 'Hanya Super Admin yang dapat mengubah password akun Super Admin.' });
+    }
+
+    // Hash password baru menggunakan scryptSync agar 100% cocok dengan verifyPassword saat login
+    const salt = generateSalt();
+    const passwordHash = hashPassword(newPassword, salt);
+
+    const isSelfReset = id === req.user?.userId;
+
+    // Update user record, reset lockout, dan cabut token lama
+    const updatedUser = await prisma.user.update({
       where: { id },
-      data: { passwordHash, salt }
+      data: {
+        passwordHash,
+        salt,
+        failedLoginCount: 0,
+        lockoutUntil: null,
+        mustChangePassword: isSelfReset ? false : targetUser.mustChangePassword,
+        tokenVersion: { increment: 1 }
+      }
     });
+
+    const refreshedToken = isSelfReset ? createToken(updatedUser as any) : undefined;
 
     await recordAuditLogDb(
       req.user!.userId,
@@ -720,11 +769,15 @@ router.put('/users/:id/password', requireRoles('super_admin', 'admin_desa'), asy
       req.user!.role,
       'Ubah Password User',
       'Sistem & Keamanan',
-      `Berhasil mengubah password untuk user ID: ${id}`,
+      `Berhasil mengubah password untuk user: ${targetUser.username}`,
       req.ip || '127.0.0.1'
     );
 
-    return res.json({ success: true, message: 'Password berhasil diperbarui.' });
+    return res.json({
+      success: true,
+      message: 'Password berhasil diperbarui.',
+      ...(refreshedToken ? { token: refreshedToken } : {})
+    });
   } catch (error: any) {
     console.error('❌ [PASSWORD-UPDATE-ERROR]:', error.message);
     return res.status(500).json({ success: false, error: 'Gagal memperbarui password.' });
@@ -2544,13 +2597,23 @@ router.post('/reset-data', requireRoles('super_admin'), async (req: Authenticate
 // 11. Automated & Manual Backup Management (Super Admin & Admin Desa)
 // Keyword: BACKUP
 const BACKUP_DIR = SERVER_CONFIG.BACKUP_DIR;
-if (!fs.existsSync(BACKUP_DIR)) {
-  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+function ensureBackupDir() {
+  try {
+    if (!fs.existsSync(BACKUP_DIR)) {
+      fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    }
+  } catch (err) {
+    console.warn('⚠️ [Backup] Direktori backup lokal tidak dapat ditulis:', err);
+  }
 }
 
 // List all database backups with metadata
 router.get('/backups', requireRoles('super_admin', 'admin_desa'), (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
+    ensureBackupDir();
+    if (!fs.existsSync(BACKUP_DIR)) {
+      return res.json({ success: true, count: 0, data: [] });
+    }
     const files = fs.readdirSync(BACKUP_DIR).filter((f: any) => f.endsWith('.json'));
     const backups = files.map((fileName) => {
       const filePath = path.join(BACKUP_DIR, fileName);
@@ -2573,6 +2636,7 @@ router.get('/backups', requireRoles('super_admin', 'admin_desa'), (req: Authenti
 // Create manual instant backup snapshot (Export Prisma to JSON)
 router.post('/backups/create', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
+    ensureBackupDir();
     const prisma = getPrisma();
     
     // Tarik snapshot data utama dari Prisma
@@ -2891,16 +2955,16 @@ router.delete('/land-parcels/:id', requireRoles('super_admin', 'admin_desa'), as
 
 // --- DATABASE BACKUP & MAINTENANCE (SUPER ADMIN ONLY) ---
 router.get('/maintenance/backups', requireRoles('super_admin'), (req: AuthenticatedRequest, res: ExpressResponse) => {
-  const backupDir = path.join(process.cwd(), 'backups');
-  if (!fs.existsSync(backupDir)) {
+  ensureBackupDir();
+  if (!fs.existsSync(BACKUP_DIR)) {
     return res.json({ success: true, data: [] });
   }
 
   try {
-    const files = fs.readdirSync(backupDir)
+    const files = fs.readdirSync(BACKUP_DIR)
       .filter(f => f.endsWith('.json'))
       .map(f => {
-        const stats = fs.statSync(path.join(backupDir, f));
+        const stats = fs.statSync(path.join(BACKUP_DIR, f));
         return {
           filename: f,
           size: stats.size,
@@ -3021,6 +3085,14 @@ router.post('/reset-database', requireRoles('super_admin'), async (req: Authenti
     console.error('❌ [RESET-DB-ERROR]:', error);
     return res.status(500).json({ success: false, error: 'Gagal mereset database: ' + (error?.message || '') });
   }
+});
+
+// --- STORAGE ARCHITECTURE REGISTRY MAP (ADMIN READ-ONLY) ---
+router.get('/storage-map', requireRoles('super_admin', 'admin_desa'), (_req: AuthenticatedRequest, res: ExpressResponse) => {
+  return res.json({
+    success: true,
+    data: getStorageArchitectureSummary()
+  });
 });
 
 export default router;

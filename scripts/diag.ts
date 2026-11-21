@@ -1,33 +1,30 @@
-import { PrismaClient } from '@prisma/client';
 import dotenv from 'dotenv';
+import minimist from 'minimist';
+import { verifyDatabaseConnectionDiagnostic } from '../server/db/connection-diagnostic';
+
 dotenv.config();
 
 async function main() {
-  const dbUrl = process.env.DATABASE_URL;
-  console.log('--- DATABASE DIAGNOSTIC ---');
-  console.log('DATABASE_URL defined:', !!dbUrl);
-  if (dbUrl) {
-    console.log('DATABASE_URL starts with:', dbUrl.substring(0, 15) + '...');
-  }
-  
-  const prisma = new PrismaClient();
-  try {
-    const userCount = await prisma.user.count();
-    console.log('Connection successful. User count:', userCount);
-    
-    const admin = await prisma.user.findFirst({ where: { username: 'superadmin' } });
-    if (admin) {
-      console.log('Admin user found.');
-      console.log('Is Active:', admin.isActive);
-      console.log('Failed Login Count:', admin.failedLoginCount);
-      console.log('Lockout Until:', admin.lockoutUntil);
-    } else {
-      console.log('Admin user NOT FOUND!');
-    }
-  } catch (err: any) {
-    console.error('Connection failed:', err.message);
-  } finally {
-    await prisma.$disconnect();
+  const args = minimist(process.argv.slice(2));
+  const expectedProjectRef =
+    typeof args.expected === 'string'
+      ? args.expected
+      : typeof args.ref === 'string'
+      ? args.ref
+      : undefined;
+
+  const report = await verifyDatabaseConnectionDiagnostic({
+    expectedProjectRef,
+    silent: false,
+    checkLiveConnection: true
+  });
+
+  if (report.overallStatus !== 'HEALTHY') {
+    process.exitCode = 1;
   }
 }
-main();
+
+main().catch((err) => {
+  console.error('❌ [DIAG-FATAL]:', err?.message || err);
+  process.exit(1);
+});

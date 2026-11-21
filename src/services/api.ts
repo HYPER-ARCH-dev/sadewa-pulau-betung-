@@ -76,6 +76,7 @@ const processResponse = async <T>(res: Response): Promise<{ success: boolean; da
     // Hanya redirect paksa jika request ditujukan ke endpoint admin dan user memang punya token sebelumnya
     if (isUrlAdmin && hasToken) {
       localStorage.removeItem('pulau_betung_auth_token');
+      localStorage.removeItem('pulau_betung_current_user');
       if (typeof window !== 'undefined') {
         const currentUrl = new URL(window.location.href);
         if (currentUrl.searchParams.get('login') !== 'expired') {
@@ -163,8 +164,11 @@ export const api = {
       const res = await fetch(`${BASE_URL}/auth/me`, {
         headers: getAuthHeaders(token)
       });
-      const result = await processResponse<any>(res);
-      return result.success ? result.data.user || result.data : null;
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) return null;
+      const json = await res.json();
+      if (!res.ok || !json.success) return null;
+      return json.user || json.data?.user || json.data || null;
     } catch {
       return null;
     }
@@ -178,6 +182,7 @@ export const api = {
       });
     } finally {
       localStorage.removeItem('pulau_betung_auth_token');
+      localStorage.removeItem('pulau_betung_current_user');
     }
   },
 
@@ -442,10 +447,28 @@ export const api = {
   },
 
   // 6. File Upload (Multer Multipart & Smart Client-Side Compression)
-  async uploadFileMultipart(file: File): Promise<{
+  async uploadFileMultipart(
+    file: File,
+    options?: {
+      module?:
+        | 'village-profile'
+        | 'posyandu-kia'
+        | 'news'
+        | 'officials'
+        | 'projects'
+        | 'media-public'
+        | 'complaints'
+        | 'citizen-letters'
+        | 'attendance-selfie'
+        | 'general';
+      fieldName?: 'file' | 'ktp' | 'dokumen' | 'selfie';
+    }
+  ): Promise<{
     success: boolean;
     url?: string;
     fileName?: string;
+    module?: string;
+    zone?: 'public' | 'private';
     error?: string;
     message?: string;
     size?: number;
@@ -479,9 +502,13 @@ export const api = {
         }
       }
 
+      const targetModule = options?.module || 'general';
+      const targetField = options?.fieldName || 'file';
       const formData = new FormData();
-      formData.append('file', fileToUpload);
-      const res = await fetch(`${BASE_URL}/upload`, {
+      formData.append('module', targetModule);
+      formData.append(targetField, fileToUpload);
+
+      const res = await fetch(`${BASE_URL}/upload?module=${encodeURIComponent(targetModule)}`, {
         method: 'POST',
         headers: {
           ...(localStorage.getItem('pulau_betung_auth_token') ? { 'Authorization': `Bearer ${localStorage.getItem('pulau_betung_auth_token')}` } : {})
@@ -505,7 +532,16 @@ export const api = {
       }
       const url = json.url || json.data?.url;
       const fileName = json.data?.originalName || fileToUpload.name;
-      return { success: true, url, fileName, size: json.data?.size || fileToUpload.size, message: json.message, compressionStats: compStats };
+      return {
+        success: true,
+        url,
+        fileName,
+        module: json.data?.module || targetModule,
+        zone: json.data?.zone,
+        size: json.data?.size || fileToUpload.size,
+        message: json.message,
+        compressionStats: compStats
+      };
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
       const cleanErrMsg = errMsg.includes('JSON') || errMsg.includes('Unexpected token')
@@ -515,12 +551,19 @@ export const api = {
     }
   },
 
-  async uploadFile(base64Data: string, fileName: string, mimeType: string, isPrivate: boolean = false): Promise<{ success: boolean; url?: string; error?: string; message?: string }> {
+  async uploadFile(
+    base64Data: string,
+    fileName: string,
+    mimeType: string,
+    isPrivate: boolean = false,
+    module?: string
+  ): Promise<{ success: boolean; url?: string; error?: string; message?: string }> {
     try {
-      const res = await fetch(`${BASE_URL}/upload`, {
+      const resolvedModule = module || (isPrivate ? 'citizen-letters' : 'general');
+      const res = await fetch(`${BASE_URL}/upload?module=${encodeURIComponent(resolvedModule)}`, {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ base64Data, fileName, mimeType, isPrivate })
+        body: JSON.stringify({ base64Data, fileName, mimeType, isPrivate, module: resolvedModule })
       });
 
       const contentType = res.headers.get('content-type') || '';
@@ -1094,7 +1137,7 @@ export const api = {
     }
   },
 
-  async changePassword(userId: string, newPassword: string): Promise<{ success: boolean; message?: string; error?: string }> {
+  async changePassword(userId: string, newPassword: string): Promise<{ success: boolean; message?: string; token?: string; error?: string }> {
     try {
       const res = await fetch(`${BASE_URL}/admin/users/${encodeURIComponent(userId)}/password`, {
         method: 'PUT',
@@ -1102,7 +1145,27 @@ export const api = {
         body: JSON.stringify({ newPassword })
       });
       const json = await res.json();
-      return { success: res.ok && json.success, message: json.message, error: json.error };
+      if (res.ok && json.success && json.token) {
+        localStorage.setItem('pulau_betung_auth_token', json.token);
+      }
+      return { success: res.ok && json.success, message: json.message, token: json.token, error: json.error };
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async changeOwnPassword(currentPassword: string, newPassword: string): Promise<{ success: boolean; message?: string; token?: string; error?: string }> {
+    try {
+      const res = await fetch(`${BASE_URL}/auth/change-password`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ currentPassword, newPassword })
+      });
+      const json = await res.json();
+      if (res.ok && json.success && json.token) {
+        localStorage.setItem('pulau_betung_auth_token', json.token);
+      }
+      return { success: res.ok && json.success, message: json.message, token: json.token, error: json.error };
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }

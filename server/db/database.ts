@@ -7,6 +7,8 @@ if (process.env.DATABASE_URL) {
 }
 import { hashPassword, generateSalt } from '../auth';
 import { executeDualWriteSync } from './sync/syncEngine';
+import { getPrisma } from './prisma-helpers';
+import { sanitizeDiagnosticMessage } from './connection-diagnostic';
 import {
   INITIAL_USERS,
   INITIAL_SERVICES,
@@ -26,8 +28,10 @@ import {
 } from '../../src/data/initialData';
 import { DusunRecord, RWRecord, RTRecord } from '../../src/types';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
-const DB_FILE = path.join(DATA_DIR, 'pulau_betung_db.json');
+import { STORAGE_PATHS } from '../config/storageRegistry';
+
+const DATA_DIR = STORAGE_PATHS.DATA_DIR;
+const DB_FILE = STORAGE_PATHS.JSON_DB_FILE;
 
 export interface UserRecord {
   id: string;
@@ -141,8 +145,12 @@ export interface DatabaseSchema {
 let dbInstance: DatabaseSchema | null = null;
 
 function ensureDataDirectory() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+  } catch (err) {
+    console.warn('⚠️ [Database] Direktori data lokal tidak dapat ditulis:', err);
   }
 }
 
@@ -515,8 +523,7 @@ export class PostgresPrismaAdapter implements IDatabaseAdapter {
     }
 
     try {
-      const { PrismaClient } = await import('@prisma/client');
-      const prisma = new PrismaClient();
+      const prisma = getPrisma();
       
       try {
         const [
@@ -558,8 +565,6 @@ export class PostgresPrismaAdapter implements IDatabaseAdapter {
           prisma.villageProfile.findUnique({ where: { id: 'default' } }),
           prisma.dusun.findMany({ include: { rws: { include: { rts: true } } } })
         ]);
-
-        await prisma.$disconnect();
 
         if (users.length === 0 && !villageProfile) {
           console.log('📦 PostgreSQL tables empty. Returning JSON database fallback...');
@@ -880,13 +885,12 @@ export class PostgresPrismaAdapter implements IDatabaseAdapter {
             }))
           }))
         };
-      } catch (dbErr) {
-        await prisma.$disconnect();
-        console.warn('⚠️ Prisma query failed, falling back to JSON storage:', dbErr);
+      } catch (dbErr: any) {
+        console.warn('⚠️ Prisma query failed, falling back to JSON storage:', sanitizeDiagnosticMessage(dbErr?.message || String(dbErr)));
         return this.fallback.getDb();
       }
-    } catch (err) {
-      console.warn('⚠️ Unable to connect to PostgreSQL Prisma adapter, falling back to JSON:', err);
+    } catch (err: any) {
+      console.warn('⚠️ Unable to connect to PostgreSQL Prisma adapter, falling back to JSON:', sanitizeDiagnosticMessage(err?.message || String(err)));
       return this.fallback.getDb();
     }
   }

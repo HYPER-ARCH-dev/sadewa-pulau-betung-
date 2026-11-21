@@ -180,7 +180,8 @@ export const UserManager: React.FC = () => {
   };
 
   const handleDeleteUser = async (user: UserItem) => {
-    if (user.id === currentUser?.userId) {
+    const activeUserId = currentUser?.userId || currentUser?.id;
+    if (user.id === activeUserId) {
       addToast('error', 'Tindakan Dilarang', 'Anda tidak dapat menghapus akun Anda sendiri.');
       return;
     }
@@ -362,7 +363,7 @@ export const UserManager: React.FC = () => {
                           </button>
                           <button 
                             onClick={() => handleDeleteUser(user)}
-                            disabled={user.id === currentUser?.userId || (user.role === 'super_admin' && currentUser?.role !== 'super_admin')}
+                            disabled={user.id === (currentUser?.userId || currentUser?.id) || (user.role === 'super_admin' && currentUser?.role !== 'super_admin')}
                             title="Hapus Akun"
                             className="p-2 hover:bg-rose-50 text-rose-600 rounded-lg transition-colors disabled:opacity-30"
                           >

@@ -16,6 +16,7 @@ import {
   X
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { AuthorizedImage } from '../common/ProtectedMedia';
 
 export const AttendanceLogManager: React.FC = () => {
   const { officials } = useApp();
@@ -194,7 +195,7 @@ export const AttendanceLogManager: React.FC = () => {
                           onClick={() => setPreviewImage(log.selfieUrl!)}
                           className="w-12 h-12 rounded-lg border border-slate-200 overflow-hidden cursor-pointer hover:ring-2 hover:ring-emerald-500 transition-all shadow-sm"
                         >
-                          <img src={log.selfieUrl} alt="Selfie" className="w-full h-full object-cover" />
+                          <AuthorizedImage src={log.selfieUrl} alt="Selfie" className="w-full h-full object-cover" />
                         </div>
                       ) : (
                         <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center text-slate-300">
@@ -261,7 +262,7 @@ export const AttendanceLogManager: React.FC = () => {
               </button>
             </div>
             <div className="aspect-[3/4] w-full bg-slate-900">
-              <img src={previewImage} alt="Selfie Full" className="w-full h-full object-contain" />
+              <AuthorizedImage src={previewImage} alt="Selfie Full" className="w-full h-full object-contain" />
             </div>
             <div className="p-6 text-center">
               <button

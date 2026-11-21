@@ -258,7 +258,10 @@ export const LetterForm: React.FC<LetterFormProps> = ({ onBackToCatalog, onTrack
         setKtpStats(null);
       }
 
-      const res = await api.uploadFileMultipart(activeFileToUpload);
+      const res = await api.uploadFileMultipart(activeFileToUpload, {
+        module: 'citizen-letters',
+        fieldName: 'ktp'
+      });
       if (res.success && res.url) {
         setKtpAttachmentUrl(res.url);
       } else if (res.url) {
@@ -391,7 +394,10 @@ export const LetterForm: React.FC<LetterFormProps> = ({ onBackToCatalog, onTrack
         setSupportStats(null);
       }
 
-      const res = await api.uploadFileMultipart(activeFileToUpload);
+      const res = await api.uploadFileMultipart(activeFileToUpload, {
+        module: 'citizen-letters',
+        fieldName: 'dokumen'
+      });
       if (res.success && res.url) {
         setFileAttachmentUrl(res.url);
       } else if (res.url) {
@@ -449,7 +455,10 @@ export const LetterForm: React.FC<LetterFormProps> = ({ onBackToCatalog, onTrack
         const comp = await compressImage(file, { maxWidth: 1200, maxHeight: 1200, quality: 0.8 });
         activeFile = comp.file;
       }
-      const res = await api.uploadFileMultipart(activeFile);
+      const res = await api.uploadFileMultipart(activeFile, {
+        module: 'citizen-letters',
+        fieldName: 'dokumen'
+      });
       if (res.url) {
         setHeirsKtpKkUrl(res.url);
       } else {
@@ -482,7 +491,10 @@ export const LetterForm: React.FC<LetterFormProps> = ({ onBackToCatalog, onTrack
         const comp = await compressImage(file, { maxWidth: 1200, maxHeight: 1200, quality: 0.8 });
         activeFile = comp.file;
       }
-      const res = await api.uploadFileMultipart(activeFile);
+      const res = await api.uploadFileMultipart(activeFile, {
+        module: 'citizen-letters',
+        fieldName: 'dokumen'
+      });
       if (res.url) {
         setDeathCertUrl(res.url);
       } else {
@@ -515,7 +527,10 @@ export const LetterForm: React.FC<LetterFormProps> = ({ onBackToCatalog, onTrack
         const comp = await compressImage(file, { maxWidth: 1200, maxHeight: 1200, quality: 0.8 });
         activeFile = comp.file;
       }
-      const res = await api.uploadFileMultipart(activeFile);
+      const res = await api.uploadFileMultipart(activeFile, {
+        module: 'citizen-letters',
+        fieldName: 'dokumen'
+      });
       if (res.url) {
         setMarriageBookUrl(res.url);
       } else {

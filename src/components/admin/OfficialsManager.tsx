@@ -122,7 +122,7 @@ export const OfficialsManager: React.FC = () => {
 
     setIsUploading(true);
     try {
-      const result = await uploadImageService(file, { maxWidth: 1000, maxHeight: 1000, quality: 0.8 });
+      const result = await uploadImageService(file, { maxWidth: 1000, maxHeight: 1000, quality: 0.8, module: 'officials' });
       if (result.success && result.url) {
         setImageUrl(result.url);
         const statsInfo = result.stats

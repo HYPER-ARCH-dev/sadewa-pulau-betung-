@@ -4,6 +4,7 @@ import { generateReportPDF, exportBannerImageToPDF } from '../../utils/pdfEngine
 import { useApp } from '../../context/AppContext';
 import { ServiceRequest, Complaint, RoleType, VillageProfile } from '../../types';
 import { uploadImageService } from '../../services/uploadService';
+import { AuthorizedImage, downloadAuthorizedFile } from '../common/ProtectedMedia';
 import {
   LayoutDashboard,
   FileText,
@@ -151,6 +152,7 @@ export const AdminDashboard: React.FC = () => {
   });
   const [isAdminSidebarOpen, setIsAdminSidebarOpen] = useState(false);
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [isChangingPassword, setIsChangingPassword] = useState(false);
 
@@ -226,7 +228,7 @@ export const AdminDashboard: React.FC = () => {
 
     setUploadingBrandingTarget(target);
     try {
-      const result = await uploadImageService(file);
+      const result = await uploadImageService(file, { module: 'village-profile' });
       if (result.success && result.url) {
         const resolvedUrl = result.url;
         const updatedProfile = { ...villageProfile };
@@ -1621,7 +1623,7 @@ export const AdminDashboard: React.FC = () => {
                       onClick={() => setAdminPreviewImage(selectedRequest.ktpAttachmentUrl!)}
                       className="w-20 h-14 rounded-lg overflow-hidden border border-slate-300 bg-slate-200 cursor-pointer relative group shrink-0"
                     >
-                      <img
+                      <AuthorizedImage
                         src={selectedRequest.ktpAttachmentUrl}
                         alt="KTP Pemohon"
                         className="w-full h-full object-cover"
@@ -1650,15 +1652,14 @@ export const AdminDashboard: React.FC = () => {
                       <Eye className="w-3.5 h-3.5 text-slate-600" />
                       <span>Buka Jelas</span>
                     </button>
-                    <a
-                      href={selectedRequest.ktpAttachmentUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <button
+                      type="button"
+                      onClick={() => downloadAuthorizedFile(selectedRequest.ktpAttachmentUrl!)}
                       className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-[11px]"
-                      title="Buka Berkas di Tab Baru"
+                      title="Unduh Berkas"
                     >
                       <Download className="w-3.5 h-3.5" />
-                    </a>
+                    </button>
                   </div>
                 </div>
               ) : (
@@ -1673,14 +1674,13 @@ export const AdminDashboard: React.FC = () => {
                   <span className="text-slate-700 font-medium truncate max-w-[240px]">
                     Lampiran Pendukung: {selectedRequest.fileAttachmentUrl}
                   </span>
-                  <a
-                    href={selectedRequest.fileAttachmentUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                  <button
+                    type="button"
+                    onClick={() => downloadAuthorizedFile(selectedRequest.fileAttachmentUrl!)}
                     className="text-emerald-700 font-bold hover:underline ml-2"
                   >
                     Buka Dokumen
-                  </a>
+                  </button>
                 </div>
               )}
             </div>
@@ -2049,22 +2049,21 @@ export const AdminDashboard: React.FC = () => {
               </button>
             </div>
             <div className="p-4 max-h-[75vh] overflow-auto flex items-center justify-center bg-slate-100">
-              <img
+              <AuthorizedImage
                 src={adminPreviewImage}
                 alt="KTP Pemohon"
                 className="max-w-full max-h-[65vh] object-contain rounded-xl shadow border border-slate-300"
               />
             </div>
             <div className="p-3 bg-white border-t border-slate-200 flex items-center justify-between">
-              <a
-                href={adminPreviewImage}
-                target="_blank"
-                rel="noopener noreferrer"
+              <button
+                type="button"
+                onClick={() => downloadAuthorizedFile(adminPreviewImage)}
                 className="text-xs text-emerald-700 font-bold hover:underline flex items-center gap-1.5"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Unduh Berkas Asli</span>
-              </a>
+              </button>
               <button
                 onClick={() => setAdminPreviewImage(null)}
                 className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold"
@@ -2111,10 +2110,21 @@ export const AdminDashboard: React.FC = () => {
               </div>
 
               <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Password Saat Ini:</label>
+                <input 
+                  type="password" 
+                  placeholder="Masukkan password saat ini..."
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-600 text-xs" 
+                />
+              </div>
+
+              <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">Password Baru:</label>
                 <input 
                   type="password" 
-                  placeholder="Masukkan password baru..."
+                  placeholder="Masukkan password baru (minimal 6 karakter)..."
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                   className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-600 text-xs" 
@@ -2123,24 +2133,27 @@ export const AdminDashboard: React.FC = () => {
 
               <div className="pt-2 flex items-center gap-3">
                 <button
-                  onClick={() => setIsPasswordModalOpen(false)}
+                  onClick={() => {
+                    setIsPasswordModalOpen(false);
+                    setCurrentPassword('');
+                    setNewPassword('');
+                  }}
                   className="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all"
                 >
                   Batal
                 </button>
                 <button
-                  disabled={isChangingPassword || newPassword.length < 6}
+                  disabled={isChangingPassword || !currentPassword || newPassword.length < 6}
                   onClick={async () => {
                     if (!currentUser) return;
                     setIsChangingPassword(true);
                     try {
                       const { api } = await import('../../services/api');
-                      const targetId = currentUser.userId || currentUser.id;
-                      if (!targetId) return;
-                      const res = await api.changePassword(targetId, newPassword);
+                      const res = await api.changeOwnPassword(currentPassword, newPassword);
                       if (res.success) {
-                        addToast('success', 'Password Diperbarui', 'Password Anda berhasil diubah. Sesi tetap aktif.');
+                        addToast('success', 'Password Diperbarui', 'Password Anda berhasil diubah dan token sesi diperbarui.');
                         setIsPasswordModalOpen(false);
+                        setCurrentPassword('');
                         setNewPassword('');
                       } else {
                         addToast('error', 'Gagal', res.error || 'Terjadi kesalahan saat menyimpan password.');

@@ -14,9 +14,26 @@ import {
  */
 export const API_URL = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_API_URL) || "/api";
 
+export type UploadModuleKey =
+  | 'village-profile'
+  | 'posyandu-kia'
+  | 'news'
+  | 'officials'
+  | 'projects'
+  | 'media-public'
+  | 'complaints'
+  | 'citizen-letters'
+  | 'attendance-selfie'
+  | 'general';
+
+export interface UploadImageOptions extends CompressImageOptions {
+  module?: UploadModuleKey;
+}
+
 export interface UploadImageResult {
   success: boolean;
   url: string;
+  module?: string;
   isLocalFallback: boolean;
   error?: string;
   stats?: {
@@ -50,7 +67,7 @@ export interface UploadImageResult {
  */
 export async function uploadImageService(
   file: File,
-  options?: CompressImageOptions
+  options?: UploadImageOptions
 ): Promise<UploadImageResult> {
   // Validasi tipe berkas
   if (!file || !file.type.startsWith('image/')) {
@@ -99,14 +116,16 @@ export async function uploadImageService(
   // ==========================================================================
   if (API_URL && API_URL.trim() !== '') {
     try {
+      const targetModule = options?.module || 'general';
       const formData = new FormData();
-      // Gunakan berkas yang sudah dikompresi
+      // Gunakan berkas yang sudah dikompresi & arahkan ke modul penyimpanan yang tepat
+      formData.append('module', targetModule);
       formData.append('file', processedFile);
 
       // Ambil token autentikasi jika backend Anda memerlukan Bearer token
       const token = localStorage.getItem('pulau_betung_auth_token');
 
-      const uploadEndpoint = `${API_URL.replace(/\/$/, '')}/upload`;
+      const uploadEndpoint = `${API_URL.replace(/\/$/, '')}/upload?module=${encodeURIComponent(targetModule)}`;
 
       const response = await fetch(uploadEndpoint, {
         method: 'POST',
@@ -127,6 +146,7 @@ export async function uploadImageService(
         return {
           success: true,
           url: serverUrl,
+          module: json.data?.module || targetModule,
           isLocalFallback: false,
           stats: compressionStats
         };

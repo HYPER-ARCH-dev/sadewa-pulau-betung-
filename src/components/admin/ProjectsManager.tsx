@@ -71,7 +71,7 @@ export const ProjectsManager: React.FC = () => {
 
     setUploadingTarget(target);
     try {
-      const res = await uploadImageService(file);
+      const res = await uploadImageService(file, { module: 'projects' });
       if (res.success && res.url) {
         if (target === 'before') setBeforeImage(res.url);
         else if (target === 'inProgress') setInProgressImage(res.url);

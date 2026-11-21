@@ -17,7 +17,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { useApp } from '../../context/AppContext';
 import { api } from '../../services/api';
-import { uploadImageService } from '../../services/uploadService';
+import { downloadAuthorizedFile } from '../common/ProtectedMedia';
 
 interface BackupFile {
   filename: string;
@@ -179,13 +179,14 @@ export const BackupManager: React.FC = () => {
                             })}
                           </td>
                           <td className="px-6 py-4 text-right space-x-2">
-                            <a 
-                              href={`${import.meta.env.VITE_API_URL || '/api'}/admin/maintenance/backups/download/${file.filename}`}
+                            <button
+                              type="button"
+                              onClick={() => downloadAuthorizedFile(`/api/admin/maintenance/backups/download/${encodeURIComponent(file.filename)}`, file.filename)}
                               className="inline-flex p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                               title="Download Backup"
                             >
                               <Download className="w-4 h-4" />
-                            </a>
+                            </button>
                             <button 
                               onClick={() => handleDeleteBackup(file.filename)}
                               className="p-2 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors"

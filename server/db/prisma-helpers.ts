@@ -1,11 +1,16 @@
 import { PrismaClient } from '@prisma/client';
+import { sanitizeDiagnosticMessage } from './connection-diagnostic';
 
 /**
  * 🏛️ KONTROLER UTAMA PRISMA (SINGLETON)
  * Kita pakai globalThis supaya Prisma Client cuma ada satu (biar gak menumpuk koneksi ke Supabase).
  * Ini penting banget buat performa server dan jatah koneksi gratisan Supabase!
  */
-const globalForPrisma = globalThis as unknown as { prisma: PrismaClient | undefined };
+const globalForPrisma = globalThis as unknown as {
+  prisma: PrismaClient | undefined;
+  lastSanitizedPrismaWarnAt?: number;
+  dbAvailabilityCache?: { reachable: boolean; checkedAt: number };
+};
 
 /**
  * 🔌 Ambil Koneksi Prisma
@@ -17,14 +22,49 @@ export function getPrisma(): PrismaClient {
     // 🛡️ Optimasi koneksi buat Supabase (PgBouncer)
     // Kalau pakai port 6543 (pooler), kita wajib tambahin pgbouncer=true di URL
     // biar Prisma gak error pas lagi "reuse" koneksi lama.
-    let dbUrl = process.env.DATABASE_URL || '';
+    const dbUrl = process.env.DATABASE_URL || '';
     if (dbUrl && !dbUrl.includes('pgbouncer=true') && dbUrl.includes(':6543')) {
       process.env.DATABASE_URL = dbUrl + (dbUrl.includes('?') ? '&' : '?') + 'pgbouncer=true';
     }
-    // Nyalain mesin Prisma!
-    globalForPrisma.prisma = new PrismaClient();
+    // Gunakan event logging agar Prisma tidak mencetak tenant/user/URL mentah ke stderr
+    const client = new (PrismaClient as unknown as new (opts?: Record<string, unknown>) => PrismaClient)({
+      log: [{ emit: 'event', level: 'error' }]
+    });
+    (client as any).$on?.('error', (event: any) => {
+      const now = Date.now();
+      if (!globalForPrisma.lastSanitizedPrismaWarnAt || now - globalForPrisma.lastSanitizedPrismaWarnAt > 15000) {
+        globalForPrisma.lastSanitizedPrismaWarnAt = now;
+        const cleanMsg = sanitizeDiagnosticMessage(event?.message || 'Prisma query failed', [
+          process.env.DATABASE_URL,
+          process.env.DIRECT_URL
+        ]);
+        console.warn(`⚠️ [PRISMA-DB]: ${cleanMsg}`);
+      }
+    });
+    globalForPrisma.prisma = client;
   }
   return globalForPrisma.prisma;
+}
+
+/**
+ * 🩺 Pengecekan ketersediaan database dengan cache singkat (15 detik)
+ * Mencegah endpoint publik membanjiri pooler dengan puluhan query gagal saat DB offline.
+ */
+export async function isDatabaseAvailableCached(ttlMs: number = 15000): Promise<boolean> {
+  if (!process.env.DATABASE_URL) return false;
+  const cached = globalForPrisma.dbAvailabilityCache;
+  const now = Date.now();
+  if (cached && now - cached.checkedAt < ttlMs) {
+    return cached.reachable;
+  }
+  try {
+    await getPrisma().$queryRawUnsafe('SELECT 1');
+    globalForPrisma.dbAvailabilityCache = { reachable: true, checkedAt: now };
+    return true;
+  } catch {
+    globalForPrisma.dbAvailabilityCache = { reachable: false, checkedAt: now };
+    return false;
+  }
 }
 
 // ============================================================================

@@ -10,7 +10,8 @@
 // ============================================================================
 
 import { Router, Request, Response } from 'express';
-import { getPrisma, getUserById, recordAuditLogDb } from '../db/prisma-helpers';
+import { getPrisma, getUserById, isDatabaseAvailableCached, recordAuditLogDb } from '../db/prisma-helpers';
+import { sanitizeDiagnosticMessage } from '../db/connection-diagnostic';
 import { verifyPassword, createToken, hashPassword, generateSalt, authenticateToken, AuthenticatedRequest } from '../auth';
 
 const router = Router();
@@ -25,6 +26,13 @@ router.post('/login', async (req: Request, res: Response) => {
     // Validasi input: username dan password tidak boleh kosong
     if (!username || !password) {
       return res.status(400).json({ success: false, error: 'Nama pengguna dan kata sandi wajib diisi dunsanak!' });
+    }
+
+    if (!(await isDatabaseAvailableCached())) {
+      return res.status(503).json({
+        success: false,
+        error: 'Database autentikasi belum terhubung. Periksa konfigurasi database Supabase di server.'
+      });
     }
 
     const prisma = getPrisma();
@@ -143,11 +151,14 @@ router.post('/login', async (req: Request, res: Response) => {
         role: user.role,
         roleTitle: user.roleTitle,
         phone: user.phone,
+        officialId: user.officialId,
+        permissions: user.permissions,
+        mustChangePassword: user.mustChangePassword,
         lastLogin: nowIso.toISOString()
       }
     });
   } catch (error: any) {
-    console.error('❌ [AUTH-LOGIN-ERROR]:', error);
+    console.warn('⚠️ [AUTH-LOGIN-ERROR]:', sanitizeDiagnosticMessage(error?.message || String(error)));
     return res.status(500).json({ success: false, error: 'Terjadi kesalahan sistem pada server autentikasi.' });
   }
 });
@@ -177,11 +188,14 @@ router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Resp
         role: user.role,
         roleTitle: user.roleTitle,
         phone: user.phone,
+        officialId: user.officialId,
+        permissions: user.permissions,
+        mustChangePassword: user.mustChangePassword,
         lastLogin: user.lastLogin ? user.lastLogin.toISOString() : null,
       }
     });
   } catch (error: any) {
-    console.error('❌ [AUTH-ME-ERROR]:', error);
+    console.warn('⚠️ [AUTH-ME-ERROR]:', sanitizeDiagnosticMessage(error?.message || String(error)));
     return res.status(500).json({ success: false, error: 'Gagal memuat profil pengguna.' });
   }
 });
@@ -197,8 +211,8 @@ router.post('/logout', authenticateToken, async (req: AuthenticatedRequest, res:
         where: { id: req.user.userId },
         data: { tokenVersion: { increment: 1 } }
       });
-    } catch (err) {
-      console.warn('⚠️ Gagal menaikkan tokenVersion saat logout:', err);
+    } catch (err: any) {
+      console.warn('⚠️ Gagal menaikkan tokenVersion saat logout:', sanitizeDiagnosticMessage(err?.message || String(err)));
     }
 
     // Catat log aktivitas logout
@@ -246,15 +260,19 @@ router.post('/change-password', authenticateToken, async (req: AuthenticatedRequ
     const newHash = hashPassword(newPassword, newSalt);
 
     // Simpan kata sandi baru dan cabut token lama (tokenVersion + 1)
-    await getPrisma().user.update({
+    const updatedUser = await getPrisma().user.update({
       where: { id: user.id },
       data: {
         salt: newSalt,
         passwordHash: newHash,
         mustChangePassword: false, // Hilangkan kewajiban ganti password
+        failedLoginCount: 0,
+        lockoutUntil: null,
         tokenVersion: { increment: 1 } // Matikan semua sesi login lama di perangkat lain
       },
     });
+
+    const newToken = createToken(updatedUser as any);
 
     recordAuditLogDb(
       user.id,
@@ -266,9 +284,9 @@ router.post('/change-password', authenticateToken, async (req: AuthenticatedRequ
       req.ip || '127.0.0.1'
     );
 
-    return res.json({ success: true, message: 'Kata sandi berhasil diperbarui.' });
+    return res.json({ success: true, message: 'Kata sandi berhasil diperbarui.', token: newToken });
   } catch (error: any) {
-    console.error('❌ [AUTH-CHANGE-PASSWORD-ERROR]:', error);
+    console.warn('⚠️ [AUTH-CHANGE-PASSWORD-ERROR]:', sanitizeDiagnosticMessage(error?.message || String(error)));
     return res.status(500).json({ success: false, error: 'Gagal memperbarui kata sandi.' });
   }
 });

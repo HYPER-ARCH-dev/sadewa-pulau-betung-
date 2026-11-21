@@ -1,9 +1,8 @@
 /**
  * UPLOAD SERVICE (SERVER-SIDE)
- * Menangani upload berkas KTP/persyaratan warga menggunakan middleware Multer.
- * Batas: Max 2MB, filter JPG/PNG/PDF.
- * Simpan ke: public/uploads/ dan mengembalikan URL valid: /uploads/[filename]
- * Keyword: MULTER, KTP_UPLOAD, FILE_UPLOAD
+ * Menangani upload berkas dan gambar seluruh modul SADEWA menggunakan Multer memoryStorage.
+ * Setiap unggahan diarahkan otomatis ke subfolder modul yang sesuai (Publik vs Privat)
+ * di penyimpanan lokal maupun Supabase Storage Bucket.
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
@@ -12,38 +11,44 @@ import path from 'path';
 import crypto from 'crypto';
 import multer from 'multer';
 import { authenticateToken, requireRoles, AuthenticatedRequest } from '../auth';
-import { SERVER_CONFIG } from '../config/constants';
+import {
+  STORAGE_PATHS,
+  STORAGE_MODULES,
+  resolveStorageTarget,
+  isAllowedPrivateSubfolder,
+  getStorageArchitectureSummary
+} from '../config/storageRegistry';
 
 const router = Router();
 
-// Folder target statis: public/uploads
-const PUBLIC_UPLOADS_DIR = path.join(process.cwd(), 'public', 'uploads');
-const PRIVATE_UPLOAD_DIR = SERVER_CONFIG.PRIVATE_UPLOAD_DIR;
+const PUBLIC_UPLOADS_DIR = STORAGE_PATHS.PUBLIC_UPLOADS_DIR;
+const PRIVATE_UPLOAD_DIR = STORAGE_PATHS.PRIVATE_UPLOADS_DIR;
 
-// Pastikan direktori tersedia
-if (!fs.existsSync(PUBLIC_UPLOADS_DIR)) {
-  fs.mkdirSync(PUBLIC_UPLOADS_DIR, { recursive: true });
-}
-if (!fs.existsSync(PRIVATE_UPLOAD_DIR)) {
-  fs.mkdirSync(PRIVATE_UPLOAD_DIR, { recursive: true });
+function ensureUploadDir(dirPath: string) {
+  try {
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
+    }
+  } catch (err) {
+    console.warn('⚠️ [Upload] Tidak dapat membuat direktori upload lokal:', err);
+  }
 }
 
-// Allowed MIME types & extensions
-const ALLOWED_MIME_TYPES = {
+const ALLOWED_MIME_TYPES: Record<string, string> = {
   'image/jpeg': '.jpg',
   'image/png': '.png',
   'image/jpg': '.jpg',
   'image/webp': '.webp',
   'application/pdf': '.pdf'
-} as Record<string, string>;
+};
 
 /**
- * Konfigurasi Storage Multer ke memoryStorage (Keamanan: berkas tidak ditulis ke disk secara otomatis)
+ * Konfigurasi Storage Multer ke memoryStorage
  */
 const storage = multer.memoryStorage();
 
 /**
- * Filter Berkas (FIX 3: Validasi MIME DAN Ekstensi secara AND)
+ * Filter Berkas: Validasi MIME DAN Ekstensi secara ketat (AND)
  */
 const fileFilter = (_req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
   const mime = (file.mimetype || '').toLowerCase();
@@ -62,18 +67,20 @@ const fileFilter = (_req: Request, file: Express.Multer.File, cb: multer.FileFil
 const upload = multer({
   storage,
   limits: {
-    fileSize: 10 * 1024 * 1024 // Batas: Maksimum 10 MB
+    fileSize: 10 * 1024 * 1024 // Maksimum 10 MB
   },
   fileFilter
 });
 
 /**
- * Middleware untuk menangani field 'file' atau 'ktp' secara fleksibel
+ * Middleware menerima field: 'file', 'ktp', 'dokumen', atau 'selfie'
  */
 const uploadSingleMiddleware = (req: Request, res: Response, next: NextFunction) => {
   const uploadHandler = upload.fields([
     { name: 'file', maxCount: 1 },
-    { name: 'ktp', maxCount: 1 }
+    { name: 'ktp', maxCount: 1 },
+    { name: 'dokumen', maxCount: 1 },
+    { name: 'selfie', maxCount: 1 }
   ]);
 
   uploadHandler(req, res, (err: any) => {
@@ -95,14 +102,13 @@ const uploadSingleMiddleware = (req: Request, res: Response, next: NextFunction)
       });
     }
 
-    // Normalisasi file ke req.file jika ada di fields
     const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
     if (files) {
-      if (files['file'] && files['file'][0]) {
-        req.file = files['file'][0];
-      } else if (files['ktp'] && files['ktp'][0]) {
-        req.file = files['ktp'][0];
-      }
+      req.file =
+        files['file']?.[0] ||
+        files['ktp']?.[0] ||
+        files['dokumen']?.[0] ||
+        files['selfie']?.[0];
     }
 
     next();
@@ -110,19 +116,27 @@ const uploadSingleMiddleware = (req: Request, res: Response, next: NextFunction)
 };
 
 /**
- * Validasi Magic Bytes (File Content Sniffing) untuk Base64 Fallback
+ * Validasi Magic Bytes (File Content Sniffing) untuk Gambar & PDF
  */
 function validateMagicBytes(buffer: Buffer, mimeType: string): boolean {
   if (buffer.length < 4) return false;
+  const mime = mimeType.toLowerCase();
 
-  if (mimeType === 'image/png') {
+  if (mime === 'image/png') {
     return buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47;
   }
-  if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') {
+  if (mime === 'image/jpeg' || mime === 'image/jpg') {
     return buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
   }
-  if (mimeType === 'image/webp') {
-    return buffer.subarray(8, 12).toString('ascii') === 'WEBP';
+  if (mime === 'image/webp') {
+    return (
+      buffer.length >= 12 &&
+      buffer.subarray(0, 4).toString('ascii') === 'RIFF' &&
+      buffer.subarray(8, 12).toString('ascii') === 'WEBP'
+    );
+  }
+  if (mime === 'application/pdf') {
+    return buffer.subarray(0, 4).toString('ascii') === '%PDF';
   }
 
   return false;
@@ -130,25 +144,25 @@ function validateMagicBytes(buffer: Buffer, mimeType: string): boolean {
 
 /**
  * Helper untuk membuat Signed URL terproteksi (TTL 15 menit / 900 detik)
- * untuk dokumen privat seperti KTP warga & berkas rahasia
  */
-export async function generateSignedUrl(fileName: string, expiresInSeconds: number = 900): Promise<string | null> {
+export async function generateSignedUrl(relativeOrCloudPath: string, expiresInSeconds: number = 900): Promise<string | null> {
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
-  const bucketName = process.env.SUPABASE_STORAGE_BUCKET || 'sadewa-uploads';
+  const bucketName = STORAGE_PATHS.SUPABASE_BUCKET;
 
   if (!supabaseUrl || !supabaseKey) return null;
 
   try {
     const cleanUrl = supabaseUrl.replace(/\/$/, '');
-    const uploadPath = `private/${fileName}`;
+    const normalized = relativeOrCloudPath.replace(/^\/+/, '');
+    const uploadPath = normalized.startsWith('private/') ? normalized : `private/${normalized}`;
     const targetUrl = `${cleanUrl}/storage/v1/object/sign/${bucketName}/${uploadPath}`;
 
     const response = await fetch(targetUrl, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${supabaseKey}`,
-        'apikey': supabaseKey,
+        Authorization: `Bearer ${supabaseKey}`,
+        apikey: supabaseKey,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({ expiresIn: expiresInSeconds })
@@ -159,39 +173,38 @@ export async function generateSignedUrl(fileName: string, expiresInSeconds: numb
       return `${cleanUrl}/storage/v1${data.signedURL}`;
     }
     return null;
-  } catch (err) {
+  } catch {
     return null;
   }
 }
 
 /**
- * Helper untuk mengunggah berkas ke Supabase Storage
+ * Helper untuk mengunggah berkas ke Supabase Storage sesuai struktur modul (public/<subfolder>/ atau private/<subfolder>/)
  */
 async function uploadToCloudStorage(
   buffer: Buffer,
-  fileName: string,
+  cloudObjectPath: string,
   mimeType: string,
-  isPrivate: boolean = false
+  isPrivate: boolean,
+  localFallbackPrivateUrl: string
 ): Promise<{ publicCdnUrl?: string; signedUrl?: string } | null> {
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
-  const bucketName = process.env.SUPABASE_STORAGE_BUCKET || 'sadewa-uploads';
+  const bucketName = STORAGE_PATHS.SUPABASE_BUCKET;
 
   if (!supabaseUrl || !supabaseKey) {
-    return null; // Menggunakan fallback disk lokal
+    return null;
   }
 
   try {
     const cleanUrl = supabaseUrl.replace(/\/$/, '');
-    const folderPath = isPrivate ? 'private' : 'public';
-    const uploadPath = `${folderPath}/${fileName}`;
-    const targetUrl = `${cleanUrl}/storage/v1/object/${bucketName}/${uploadPath}`;
+    const targetUrl = `${cleanUrl}/storage/v1/object/${bucketName}/${cloudObjectPath}`;
 
     const response = await fetch(targetUrl, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${supabaseKey}`,
-        'apikey': supabaseKey,
+        Authorization: `Bearer ${supabaseKey}`,
+        apikey: supabaseKey,
         'Content-Type': mimeType,
         'x-upsert': 'true'
       },
@@ -200,78 +213,76 @@ async function uploadToCloudStorage(
 
     if (response.ok) {
       if (isPrivate) {
-        // Untuk dokumen private (KTP), buat Signed URL (TTL 15 Menit)
-        const signedUrl = await generateSignedUrl(fileName, 900);
-        console.log(`🔒 Dokumen KTP/Privat berhasil disimpan di folder 'private/' Supabase Storage with Signed URL.`);
-        return { signedUrl: signedUrl || `/api/upload/private/${fileName}` };
-      } else {
-        const publicCdnUrl = `${cleanUrl}/storage/v1/object/public/${bucketName}/${uploadPath}`;
-        console.log(`🌐 Berkas publik berhasil diunggah ke Supabase Storage CDN: ${publicCdnUrl}`);
-        return { publicCdnUrl };
+        const signedUrl = await generateSignedUrl(cloudObjectPath, 900);
+        return { signedUrl: signedUrl || localFallbackPrivateUrl };
       }
-    } else {
-      const errText = await response.text();
-      console.warn(`⚠️ Supabase Storage upload error (${response.status}): ${errText}. Menggunakan fallback lokal.`);
-      return null;
+      const publicCdnUrl = `${cleanUrl}/storage/v1/object/public/${bucketName}/${cloudObjectPath}`;
+      return { publicCdnUrl };
     }
+
+    const errText = await response.text();
+    console.warn(`⚠️ Supabase Storage upload error (${response.status}): ${errText}. Menggunakan fallback lokal.`);
+    return null;
   } catch (err) {
-    console.warn(`⚠️ Gagal terhubung ke Cloud Storage:`, err);
+    console.warn('⚠️ Gagal terhubung ke Cloud Storage:', err);
     return null;
   }
 }
 
 /**
- * Helper untuk menghapus seluruh objek di bucket Supabase Storage saat Factory Reset
- * Menggunakan pagination loop (batch 1000 file per iterasi) untuk performa tinggi & bebas limit
+ * Helper untuk menghapus seluruh objek (termasuk subfolder per modul) di bucket Supabase Storage
  */
 export async function clearSupabaseStorageBucket(): Promise<boolean> {
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
-  const bucketName = process.env.SUPABASE_STORAGE_BUCKET || 'sadewa-uploads';
+  const bucketName = STORAGE_PATHS.SUPABASE_BUCKET;
 
   if (!supabaseUrl || !supabaseKey) {
     console.warn('⚠️ Supabase credentials tidak ditemukan. Melewati pembersihan storage bucket.');
     return false;
   }
 
+  const prefixes = [
+    'public',
+    'private',
+    ...Object.values(STORAGE_MODULES).map((m) => `${m.visibility}/${m.subfolder}`)
+  ];
+
   try {
     const cleanUrl = supabaseUrl.replace(/\/$/, '');
-    for (const prefix of ['public', 'private']) {
+    for (const prefix of [...new Set(prefixes)]) {
       let hasMore = true;
       let totalDeleted = 0;
 
       while (hasMore) {
-        // 1. Minta daftar file per batch (max 1000 per request)
         const listRes = await fetch(`${cleanUrl}/storage/v1/object/list/${bucketName}`, {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${supabaseKey}`,
-            'apikey': supabaseKey,
+            Authorization: `Bearer ${supabaseKey}`,
+            apikey: supabaseKey,
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({ prefix, limit: 1000, offset: 0 })
         });
 
         if (!listRes.ok) {
-          const errText = await listRes.text();
-          console.warn(`⚠️ Gagal mendaftar berkas '${prefix}' di Supabase Storage (${listRes.status}): ${errText}`);
           hasMore = false;
           break;
         }
 
-        const files: any[] = await listRes.json();
-        if (!Array.isArray(files) || files.length === 0) {
+        const items: any[] = await listRes.json();
+        const files = Array.isArray(items) ? items.filter((item) => item?.id !== null && item?.name) : [];
+        if (files.length === 0) {
           hasMore = false;
           break;
         }
 
-        // 2. Buat daftar prefix lokasi file yang akan dihapus secara batch
-        const prefixesToDelete = files.map(f => `${prefix}/${f.name}`);
+        const prefixesToDelete = files.map((f) => `${prefix}/${f.name}`);
         const delRes = await fetch(`${cleanUrl}/storage/v1/object/${bucketName}`, {
           method: 'DELETE',
           headers: {
-            'Authorization': `Bearer ${supabaseKey}`,
-            'apikey': supabaseKey,
+            Authorization: `Bearer ${supabaseKey}`,
+            apikey: supabaseKey,
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({ prefixes: prefixesToDelete })
@@ -279,17 +290,14 @@ export async function clearSupabaseStorageBucket(): Promise<boolean> {
 
         if (delRes.ok) {
           totalDeleted += files.length;
-          // Jika jumlah file yang didapat < 1000, berarti seluruh file di folder ini sudah habis
-          if (files.length < 1000) {
-            hasMore = false;
-          }
+          if (files.length < 1000) hasMore = false;
         } else {
-          const delErr = await delRes.text();
-          console.warn(`⚠️ Gagal menghapus batch berkas '${prefix}' (${delRes.status}): ${delErr}`);
           hasMore = false;
         }
       }
-      console.log(`🧹 Folder '${prefix}/' Supabase Storage berhasil dibersihkan total (${totalDeleted} berkas terhapus).`);
+      if (totalDeleted > 0) {
+        console.log(`🧹 Folder '${prefix}/' Supabase Storage berhasil dibersihkan (${totalDeleted} berkas terhapus).`);
+      }
     }
     return true;
   } catch (err: any) {
@@ -299,54 +307,66 @@ export async function clearSupabaseStorageBucket(): Promise<boolean> {
 }
 
 /**
- * POST /api/upload, POST /api/upload/file, dan POST /api/upload/ktp
+ * POST /api/upload, POST /api/upload/file, POST /api/upload/ktp
  */
 const handleUploadRequest = async (req: Request, res: Response) => {
   try {
-    let extension = '.jpg';
-    // FIX 1: isPrivate HANYA ditentukan dari SERVER (Route & Field Name), BUKAN Payload Client
+    const requestedModule = (req.body?.module || req.query?.module || '') as string;
     const fieldName = (req.file?.fieldname || req.body?.fieldname || '').toLowerCase();
-    const pathLower = (req.path || '').toLowerCase();
-    const PRIVATE_FIELDS = ['ktp', 'selfie', 'dokumen-surat', 'dokumen', 'persyaratan', 'berkas-rahasia'];
 
-    const isPrivate = pathLower.includes('/ktp') || 
-                      pathLower.includes('/private') || 
-                      PRIVATE_FIELDS.includes(fieldName);
-
-    // 1. Tangani jika diunggah via Multer (multipart/form-data)
+    // 1. Tangani unggahan Multer (multipart/form-data)
     if (req.file) {
-      const fileBuffer = req.file.buffer; // Memory storage uses buffer
+      const fileBuffer = req.file.buffer;
+      const mimeType = (req.file.mimetype || '').toLowerCase();
 
-      // FIX 3b: Jalankan validateMagicBytes di SEMUA jalur
-      if (!validateMagicBytes(fileBuffer, req.file.mimetype)) {
+      if (!validateMagicBytes(fileBuffer, mimeType)) {
         return res.status(400).json({
           success: false,
           message: 'Integritas berkas ditolak: Konten biner tidak sesuai format.'
         });
       }
 
-      // FIX 3c: Tentukan ekstensi dari mime hasil deteksi magic bytes
-      extension = ALLOWED_MIME_TYPES[req.file.mimetype] || '.jpg';
+      const extension = ALLOWED_MIME_TYPES[mimeType] || '.jpg';
       const safeHash = crypto.randomBytes(12).toString('hex');
-      const safeFileName = `${isPrivate ? 'private' : 'upload'}-${Date.now()}-${safeHash}${extension}`;
+      const provisionalName = `file-${Date.now()}-${safeHash}${extension}`;
 
-      const cloudResult = await uploadToCloudStorage(fileBuffer, safeFileName, req.file.mimetype, isPrivate);
+      const target = resolveStorageTarget({
+        moduleKey: requestedModule,
+        fieldName,
+        reqPath: req.path,
+        fileName: provisionalName
+      });
 
-      // FIX 3e: File privat tidak pernah ke public/uploads
+      const safeFileName = `${target.isPrivate ? 'private' : 'upload'}-${Date.now()}-${safeHash}${extension}`;
+      const finalTarget = resolveStorageTarget({
+        moduleKey: target.moduleKey,
+        fieldName,
+        reqPath: req.path,
+        fileName: safeFileName
+      });
+
+      const cloudResult = await uploadToCloudStorage(
+        fileBuffer,
+        finalTarget.cloudObjectPath,
+        mimeType,
+        finalTarget.isPrivate,
+        finalTarget.localPublicUrl
+      );
+
       let finalUrl = '';
       if (cloudResult?.signedUrl || cloudResult?.publicCdnUrl) {
         finalUrl = (cloudResult.signedUrl || cloudResult.publicCdnUrl) as string;
       } else {
-        const targetDir = isPrivate ? PRIVATE_UPLOAD_DIR : PUBLIC_UPLOADS_DIR;
-        const targetPath = path.join(targetDir, safeFileName);
+        ensureUploadDir(finalTarget.localTargetDir);
+        const targetPath = path.join(finalTarget.localTargetDir, safeFileName);
         fs.writeFileSync(targetPath, fileBuffer);
-        finalUrl = isPrivate ? `/api/upload/private/${safeFileName}` : `/uploads/${safeFileName}`;
+        finalUrl = finalTarget.localPublicUrl;
       }
 
       return res.status(201).json({
         success: true,
-        message: isPrivate
-          ? 'Dokumen berhasil disimpan secara terproteksi.'
+        message: finalTarget.isPrivate
+          ? 'Dokumen berhasil disimpan ke zona privat terproteksi.'
           : 'Berkas berhasil diunggah.',
         url: finalUrl,
         data: {
@@ -354,14 +374,17 @@ const handleUploadRequest = async (req: Request, res: Response) => {
           fileName: safeFileName,
           url: finalUrl,
           size: req.file.size,
-          mimeType: req.file.mimetype,
-          isPrivate,
+          mimeType,
+          module: finalTarget.moduleKey,
+          zone: finalTarget.visibility,
+          subfolder: finalTarget.subfolder,
+          isPrivate: finalTarget.isPrivate,
           isCloud: Boolean(cloudResult)
         }
       });
     }
 
-    // 2. Tangani fallback jika data dikirim sebagai JSON Base64
+    // 2. Tangani fallback JSON Base64
     const { base64Data, fileName, mimeType } = req.body || {};
 
     if (!base64Data || !mimeType) {
@@ -372,8 +395,9 @@ const handleUploadRequest = async (req: Request, res: Response) => {
       });
     }
 
-    extension = ALLOWED_MIME_TYPES[mimeType] || '.jpg';
-    const cleanBase64 = base64Data.replace(/^data:[^;]+;base64,/, '');
+    const normalizedMime = String(mimeType).toLowerCase();
+    const extension = ALLOWED_MIME_TYPES[normalizedMime] || '.jpg';
+    const cleanBase64 = String(base64Data).replace(/^data:[^;]+;base64,/, '');
     const buffer = Buffer.from(cleanBase64, 'base64');
 
     const MAX_SIZE = 10 * 1024 * 1024;
@@ -385,7 +409,7 @@ const handleUploadRequest = async (req: Request, res: Response) => {
       });
     }
 
-    if (!validateMagicBytes(buffer, mimeType)) {
+    if (!validateMagicBytes(buffer, normalizedMime)) {
       return res.status(400).json({
         success: false,
         message: 'Integritas berkas ditolak: Konten biner tidak sesuai format.'
@@ -393,24 +417,42 @@ const handleUploadRequest = async (req: Request, res: Response) => {
     }
 
     const safeHash = crypto.randomBytes(12).toString('hex');
-    const safeFileName = `${isPrivate ? 'private' : 'upload'}-${Date.now()}-${safeHash}${extension}`;
+    const initialTarget = resolveStorageTarget({
+      moduleKey: requestedModule,
+      fieldName,
+      reqPath: req.path,
+      fileName: `tmp-${safeHash}${extension}`
+    });
+    const safeFileName = `${initialTarget.isPrivate ? 'private' : 'upload'}-${Date.now()}-${safeHash}${extension}`;
+    const finalTarget = resolveStorageTarget({
+      moduleKey: initialTarget.moduleKey,
+      fieldName,
+      reqPath: req.path,
+      fileName: safeFileName
+    });
 
-    const cloudResult = await uploadToCloudStorage(buffer, safeFileName, mimeType, isPrivate);
+    const cloudResult = await uploadToCloudStorage(
+      buffer,
+      finalTarget.cloudObjectPath,
+      normalizedMime,
+      finalTarget.isPrivate,
+      finalTarget.localPublicUrl
+    );
 
     let finalUrl = '';
     if (cloudResult?.signedUrl || cloudResult?.publicCdnUrl) {
       finalUrl = (cloudResult.signedUrl || cloudResult.publicCdnUrl) as string;
     } else {
-      const targetDir = isPrivate ? PRIVATE_UPLOAD_DIR : PUBLIC_UPLOADS_DIR;
-      const targetPath = path.join(targetDir, safeFileName);
+      ensureUploadDir(finalTarget.localTargetDir);
+      const targetPath = path.join(finalTarget.localTargetDir, safeFileName);
       fs.writeFileSync(targetPath, buffer);
-      finalUrl = isPrivate ? `/api/upload/private/${safeFileName}` : `/uploads/${safeFileName}`;
+      finalUrl = finalTarget.localPublicUrl;
     }
 
     return res.status(201).json({
       success: true,
-      message: isPrivate
-        ? 'Dokumen tersimpan secara privat.'
+      message: finalTarget.isPrivate
+        ? 'Dokumen tersimpan di zona privat.'
         : 'Berkas berhasil diunggah.',
       url: finalUrl,
       data: {
@@ -418,13 +460,16 @@ const handleUploadRequest = async (req: Request, res: Response) => {
         fileName: safeFileName,
         url: finalUrl,
         size: buffer.length,
-        mimeType,
-        isPrivate,
+        mimeType: normalizedMime,
+        module: finalTarget.moduleKey,
+        zone: finalTarget.visibility,
+        subfolder: finalTarget.subfolder,
+        isPrivate: finalTarget.isPrivate,
         isCloud: Boolean(cloudResult)
       }
     });
   } catch (err: any) {
-    console.error('Upload handler error:', err);
+    console.warn('⚠️ [Upload handler error]:', err?.message || err);
     return res.status(500).json({
       success: false,
       message: 'Gagal memproses unggahan berkas di server.'
@@ -437,32 +482,64 @@ router.post('/file', uploadSingleMiddleware, handleUploadRequest);
 router.post('/ktp', uploadSingleMiddleware, handleUploadRequest);
 
 /**
- * Akses berkas privat terproteksi
- * GET /api/upload/private/:filename
+ * Informasi Peta Jalur Penyimpanan Publik-vs-Privat (Admin Only)
  */
+router.get('/registry', authenticateToken, requireRoles('super_admin', 'admin_desa'), (_req: AuthenticatedRequest, res: Response) => {
+  return res.json({
+    success: true,
+    data: getStorageArchitectureSummary()
+  });
+});
+
+/**
+ * Akses berkas privat terproteksi:
+ * Mendukung baik format baru (/api/upload/private/:subfolder/:filename)
+ * maupun format lama (/api/upload/private/:filename).
+ */
+const handleServePrivateFile = (req: AuthenticatedRequest, res: Response) => {
+  const { subfolder, filename } = req.params;
+  const safeFile = path.basename(filename || '');
+
+  if (!safeFile || safeFile !== filename || filename.includes('..')) {
+    return res.status(400).json({ success: false, error: 'Nama berkas tidak valid.' });
+  }
+
+  let resolvedPath = '';
+  if (subfolder) {
+    const safeSub = path.basename(subfolder);
+    if (safeSub !== subfolder || !isAllowedPrivateSubfolder(safeSub)) {
+      return res.status(403).json({ success: false, error: 'Subfolder privat tidak valid.' });
+    }
+    resolvedPath = path.resolve(PRIVATE_UPLOAD_DIR, safeSub, safeFile);
+  } else {
+    resolvedPath = path.resolve(PRIVATE_UPLOAD_DIR, safeFile);
+  }
+
+  const baseResolved = path.resolve(PRIVATE_UPLOAD_DIR);
+  if (!resolvedPath.startsWith(baseResolved + path.sep)) {
+    return res.status(403).json({ success: false, error: 'Akses direktori ditolak.' });
+  }
+
+  if (!fs.existsSync(resolvedPath)) {
+    return res.status(404).json({ success: false, error: 'Dokumen tidak ditemukan.' });
+  }
+
+  return res.sendFile(resolvedPath);
+};
+
+router.get(
+  '/private/:subfolder/:filename',
+  authenticateToken,
+  requireRoles('super_admin', 'admin_desa', 'operator'),
+  handleServePrivateFile
+);
+
 router.get(
   '/private/:filename',
   authenticateToken,
   requireRoles('super_admin', 'admin_desa', 'operator'),
-  (req: AuthenticatedRequest, res: Response) => {
-    const { filename } = req.params;
-    const sanitized = path.basename(filename);
-
-    if (sanitized !== filename || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
-      return res.status(400).json({ success: false, error: 'Nama berkas tidak valid.' });
-    }
-
-    const filePath = path.resolve(PRIVATE_UPLOAD_DIR, sanitized);
-    if (!filePath.startsWith(PRIVATE_UPLOAD_DIR)) {
-      return res.status(403).json({ success: false, error: 'Akses direktori ditolak.' });
-    }
-
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ success: false, error: 'Dokumen tidak ditemukan.' });
-    }
-
-    return res.sendFile(filePath);
-  }
+  handleServePrivateFile
 );
 
+export { PUBLIC_UPLOADS_DIR };
 export default router;

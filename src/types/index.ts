@@ -17,6 +17,7 @@ export interface User {
   birthDate?: string;
   officialId?: string;
   permissions?: any;
+  mustChangePassword?: boolean;
 }
 
 export type PriorityLevel = 'normal' | 'penting' | 'mendesak';

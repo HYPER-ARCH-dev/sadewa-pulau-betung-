@@ -1,7 +1,11 @@
 import { Router, Request, Response as ExpressResponse } from 'express';
 import crypto from 'crypto';
-import { getPrisma, getVillageProfile } from '../db/prisma-helpers';
+import { getPrisma, getVillageProfile, isDatabaseAvailableCached } from '../db/prisma-helpers';
+import { getDb } from '../db/database';
+import { sanitizeDiagnosticMessage } from '../db/connection-diagnostic';
 import { hashPassword, verifyPassword, verifyToken } from '../auth';
+
+const allowJsonFallback = () => process.env.MIGRATION_PHASE !== 'PHASE_3_SUPABASE_ONLY';
 
 // 🏛️ INISIALISASI ROUTER UNTUK LAYANAN PUBLIK
 // Jalur ini bisa diakses siapa saja (Warga, Pengunjung, Bot) tanpa perlu login admin.
@@ -84,6 +88,51 @@ function checkRateLimit(ip: string): { allowed: boolean; retryAfterMin?: number 
 // 1. All public data bundle for efficient bootstrapping
 router.get('/bootstrap', async (req: Request, res: ExpressResponse) => {
   try {
+    const dbAvailable = await isDatabaseAvailableCached();
+    if (!dbAvailable) {
+      if (allowJsonFallback()) {
+        const db = getDb();
+        return res.json({
+          success: true,
+          degraded: true,
+          data: {
+            profile: db.villageProfile || null,
+            services: (db.services || []).filter((s: any) => s.isActive !== false),
+            news: (db.news || []).filter((n: any) => n.isPublished !== false).slice(0, 6),
+            announcements: (db.announcements || []).filter((a: any) => a.isActive !== false).slice(0, 5),
+            agendas: (db.agendas || []).slice(0, 5),
+            projects: (db.developmentProjects || []).slice(0, 5),
+            budget: db.budget || null,
+            officials: (db.officials || []).filter((o: any) => o.isActive !== false),
+            potentials: (db.potentials || []).slice(0, 4),
+            umkm: (db.umkm || []).filter((u: any) => u.isVerified !== false).slice(0, 4),
+            facilities: (db.facilities || []).slice(0, 6),
+            gallery: (db.gallery || []).slice(0, 6),
+            territories: db.territories || []
+          }
+        });
+      }
+      return res.json({
+        success: true,
+        degraded: true,
+        data: {
+          profile: null,
+          services: [],
+          news: [],
+          announcements: [],
+          agendas: [],
+          projects: [],
+          budget: null,
+          officials: [],
+          potentials: [],
+          umkm: [],
+          facilities: [],
+          gallery: [],
+          territories: []
+        }
+      });
+    }
+
     const p = getPrisma();
     
     // Tarik seluruh data secara paralel dengan Promise.all
@@ -158,7 +207,7 @@ router.get('/bootstrap', async (req: Request, res: ExpressResponse) => {
       }
     });
   } catch (error: any) {
-    console.error('❌ [BOOTSTRAP-ERROR]:', error.message);
+    console.warn('⚠️ [BOOTSTRAP-ERROR]:', sanitizeDiagnosticMessage(error?.message || String(error)));
     return res.status(503).json({ 
       success: false, 
       error: 'Layanan data desa sedang sibuk. Silakan segarkan halaman dalam beberapa saat.' 
@@ -169,16 +218,26 @@ router.get('/bootstrap', async (req: Request, res: ExpressResponse) => {
 // 2. Village Profile
 router.get('/profile', async (req: Request, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const fallback = allowJsonFallback() ? getDb().villageProfile || null : null;
+      return res.json({ success: true, data: fallback, degraded: true });
+    }
     const data = await getVillageProfile();
     return res.json({ success: true, data });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: 'Gagal memuat profil desa.' });
+  } catch (error: any) {
+    console.warn('⚠️ [PUBLIC-PROFILE-DEGRADED]:', sanitizeDiagnosticMessage(error?.message || String(error)));
+    const fallback = allowJsonFallback() ? getDb().villageProfile || null : null;
+    return res.json({ success: true, data: fallback, degraded: true });
   }
 });
 
 // 2b. Master Wilayah Publik (Dusun -> RW -> RT)
 router.get('/territories', async (req: Request, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const fallback = allowJsonFallback() ? getDb().territories || [] : [];
+      return res.json({ success: true, data: fallback, degraded: true });
+    }
     const data = await getPrisma().dusun.findMany({
       where: { isActive: true },
       include: {
@@ -192,21 +251,29 @@ router.get('/territories', async (req: Request, res: ExpressResponse) => {
       orderBy: { number: 'asc' }
     });
     return res.json({ success: true, data });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: 'Gagal memuat data wilayah.' });
+  } catch (error: any) {
+    console.warn('⚠️ [PUBLIC-TERRITORIES-DEGRADED]:', sanitizeDiagnosticMessage(error?.message || String(error)));
+    const fallback = allowJsonFallback() ? getDb().territories || [] : [];
+    return res.json({ success: true, data: fallback, degraded: true });
   }
 });
 
 // 3. Services Catalog
 router.get('/services', async (req: Request, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const fallback = allowJsonFallback() ? (getDb().services || []).filter((s: any) => s.isActive !== false) : [];
+      return res.json({ success: true, data: fallback, degraded: true });
+    }
     const data = await getPrisma().villageService.findMany({
       where: { isActive: true },
       orderBy: { category: 'asc' }
     });
     return res.json({ success: true, data });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: 'Gagal memuat daftar layanan.' });
+  } catch (error: any) {
+    console.warn('⚠️ [PUBLIC-SERVICES-DEGRADED]:', sanitizeDiagnosticMessage(error?.message || String(error)));
+    const fallback = allowJsonFallback() ? (getDb().services || []).filter((s: any) => s.isActive !== false) : [];
+    return res.json({ success: true, data: fallback, degraded: true });
   }
 });
 
@@ -245,6 +312,13 @@ router.post('/services/apply', async (req: Request, res: ExpressResponse) => {
       return res.status(400).json({
         success: false,
         error: 'Format NIK tidak valid. NIK harus terdiri dari 16 digit angka resmi.'
+      });
+    }
+
+    if (!(await isDatabaseAvailableCached())) {
+      return res.status(503).json({
+        success: false,
+        error: 'Koneksi database sedang tidak tersedia. Pengajuan surat belum dapat diproses.'
       });
     }
 
@@ -298,7 +372,7 @@ router.post('/services/apply', async (req: Request, res: ExpressResponse) => {
       }
     });
   } catch (error: any) {
-    console.error('❌ [SERVICE-APPLY-ERROR]:', error.message);
+    console.warn('⚠️ [SERVICE-APPLY-ERROR]:', sanitizeDiagnosticMessage(error?.message || String(error)));
     return res.status(500).json({ success: false, error: 'Gagal mengirim permohonan surat. Silakan coba lagi.' });
   }
 });
@@ -306,6 +380,13 @@ router.post('/services/apply', async (req: Request, res: ExpressResponse) => {
 // 5. Public Application Tracking (FIX 6: Exact Match, Limited Columns, Generic 404)
 router.get('/tracking/:code', async (req: Request, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      return res.status(503).json({
+        success: false,
+        error: 'Koneksi database sedang tidak tersedia untuk pelacakan permohonan.'
+      });
+    }
+
     const rawCode = (req.params.code || '').trim();
     const prisma = getPrisma();
 
@@ -332,7 +413,7 @@ router.get('/tracking/:code', async (req: Request, res: ExpressResponse) => {
       data: found
     });
   } catch (error: any) {
-    console.error('❌ [TRACKING-ERROR]:', error.message);
+    console.warn('⚠️ [TRACKING-ERROR]:', sanitizeDiagnosticMessage(error?.message || String(error)));
     return res.status(500).json({ success: false, error: 'Terjadi kesalahan saat melacak permohonan.' });
   }
 });
@@ -367,6 +448,15 @@ const handleDocumentVerification = async (req: Request, res: ExpressResponse) =>
       candidateKeys.push(...parseTrackingCodeFromKey(letterNumber));
     }
     
+    if (!(await isDatabaseAvailableCached())) {
+      return res.status(503).json({
+        success: false,
+        verified: false,
+        reason: 'DATABASE_UNAVAILABLE',
+        error: 'Layanan verifikasi dokumen belum dapat mengakses database saat ini.'
+      });
+    }
+
     const prisma = getPrisma();
     const cleanSearchKey = searchKey.toUpperCase().replace(/[^A-Z0-9]/g, '');
 
@@ -435,7 +525,7 @@ const handleDocumentVerification = async (req: Request, res: ExpressResponse) =>
       }
     });
   } catch (err: any) {
-    console.error('Terjadi kesalahan internal verifikasi dokumen:', err);
+    console.warn('⚠️ [VERIFY-DOC-ERROR]:', sanitizeDiagnosticMessage(err?.message || String(err)));
     return res.status(500).json({
       success: false,
       verified: false,
@@ -470,6 +560,13 @@ router.post('/complaints', async (req: Request, res: ExpressResponse) => {
       });
     }
 
+    if (!(await isDatabaseAvailableCached())) {
+      return res.status(503).json({
+        success: false,
+        error: 'Koneksi database belum tersedia. Pengaduan belum dapat disimpan ke server.'
+      });
+    }
+
     const prisma = getPrisma();
     const currentCount = await prisma.complaint.count();
     const ticketNumber = `ADU-PB-2026-${String(currentCount + 1).padStart(3, '0')}`;
@@ -501,7 +598,7 @@ router.post('/complaints', async (req: Request, res: ExpressResponse) => {
       }
     });
   } catch (error: any) {
-    console.error('❌ [COMPLAINT-POST-ERROR]:', error.message);
+    console.warn('⚠️ [COMPLAINT-POST-ERROR]:', sanitizeDiagnosticMessage(error?.message || String(error)));
     return res.status(500).json({ success: false, error: 'Gagal mengirim pengaduan. Silakan coba lagi.' });
   }
 });
@@ -509,6 +606,13 @@ router.post('/complaints', async (req: Request, res: ExpressResponse) => {
 // 7. Track Complaint by Ticket
 router.get('/complaints/track/:ticket', async (req: Request, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      return res.status(503).json({
+        success: false,
+        error: 'Koneksi database belum tersedia untuk pelacakan pengaduan.'
+      });
+    }
+
     const ticket = req.params.ticket.trim().toUpperCase();
     const prisma = getPrisma();
 
@@ -539,6 +643,7 @@ router.get('/complaints/track/:ticket', async (req: Request, res: ExpressRespons
       }
     });
   } catch (error: any) {
+    console.warn('⚠️ [COMPLAINT-TRACK-ERROR]:', sanitizeDiagnosticMessage(error?.message || String(error)));
     return res.status(500).json({ success: false, error: 'Gagal melacak pengaduan.' });
   }
 });
@@ -546,6 +651,12 @@ router.get('/complaints/track/:ticket', async (req: Request, res: ExpressRespons
 // 8. Public resolved complaints feed (FIX 7: Filter by isPublic=true)
 router.get('/complaints/public', async (req: Request, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const list = allowJsonFallback()
+        ? (getDb().complaints || []).filter((c: any) => c.isPublic).slice(0, 20)
+        : [];
+      return res.json({ success: true, data: list, degraded: true });
+    }
     const prisma = getPrisma();
     const list = await prisma.complaint.findMany({
       where: { isPublic: true },
@@ -568,63 +679,100 @@ router.get('/complaints/public', async (req: Request, res: ExpressResponse) => {
     
     return res.json({ success: true, data: sanitizedList });
   } catch (error: any) {
-    return res.status(500).json({ success: false, error: 'Gagal memuat daftar pengaduan publik.' });
+    console.warn('⚠️ [PUBLIC-COMPLAINTS-DEGRADED]:', sanitizeDiagnosticMessage(error?.message || String(error)));
+    return res.json({ success: true, data: [], degraded: true });
   }
 });
 
 // 9. News / Berita
 router.get('/news', async (req: Request, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const fallback = allowJsonFallback() ? (getDb().news || []).filter((n: any) => n.isPublished !== false) : [];
+      return res.json({ success: true, data: fallback, degraded: true });
+    }
     const data = await getPrisma().newsItem.findMany({
       where: { isPublished: true },
       orderBy: { publishedAt: 'desc' }
     });
     return res.json({ success: true, data });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: 'Gagal memuat berita.' });
+  } catch (error: any) {
+    console.warn('⚠️ [PUBLIC-NEWS-DEGRADED]:', sanitizeDiagnosticMessage(error?.message || String(error)));
+    const fallback = allowJsonFallback() ? (getDb().news || []).filter((n: any) => n.isPublished !== false) : [];
+    return res.json({ success: true, data: fallback, degraded: true });
   }
 });
 
 // 10. Announcements
 router.get('/announcements', async (req: Request, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const fallback = allowJsonFallback() ? (getDb().announcements || []).filter((a: any) => a.isActive !== false) : [];
+      return res.json({ success: true, data: fallback, degraded: true });
+    }
     const data = await getPrisma().announcement.findMany({
       where: { isActive: true },
       orderBy: { publishedAt: 'desc' }
     });
     return res.json({ success: true, data });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: 'Gagal memuat pengumuman.' });
+  } catch (error: any) {
+    console.warn('⚠️ [PUBLIC-ANNOUNCEMENTS-DEGRADED]:', sanitizeDiagnosticMessage(error?.message || String(error)));
+    const fallback = allowJsonFallback() ? (getDb().announcements || []).filter((a: any) => a.isActive !== false) : [];
+    return res.json({ success: true, data: fallback, degraded: true });
   }
 });
 
 // 11. Agendas
 router.get('/agendas', async (req: Request, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const fallback = allowJsonFallback() ? getDb().agendas || [] : [];
+      return res.json({ success: true, data: fallback, degraded: true });
+    }
     const data = await getPrisma().agendaItem.findMany({
       orderBy: { date: 'desc' }
     });
     return res.json({ success: true, data });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: 'Gagal memuat agenda kegiatan.' });
+  } catch (error: any) {
+    console.warn('⚠️ [PUBLIC-AGENDAS-DEGRADED]:', sanitizeDiagnosticMessage(error?.message || String(error)));
+    const fallback = allowJsonFallback() ? getDb().agendas || [] : [];
+    return res.json({ success: true, data: fallback, degraded: true });
   }
 });
 
 // 12. Development Projects
 router.get('/projects', async (req: Request, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const fallback = allowJsonFallback() ? getDb().developmentProjects || [] : [];
+      return res.json({ success: true, data: fallback, degraded: true });
+    }
     const data = await getPrisma().developmentProject.findMany({
       orderBy: { fiscalYear: 'desc' }
     });
     return res.json({ success: true, data });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: 'Gagal memuat data pembangunan.' });
+  } catch (error: any) {
+    console.warn('⚠️ [PUBLIC-PROJECTS-DEGRADED]:', sanitizeDiagnosticMessage(error?.message || String(error)));
+    const fallback = allowJsonFallback() ? getDb().developmentProjects || [] : [];
+    return res.json({ success: true, data: fallback, degraded: true });
   }
 });
 
 // 13. Transparency / APBDes
 router.get('/transparency', async (req: Request, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const fallbackBudget = allowJsonFallback() ? getDb().budget || null : null;
+      return res.json({
+        success: true,
+        degraded: true,
+        data: {
+          budget: fallbackBudget,
+          isDemoDataNotice: true,
+          noticeText: 'Data APBDes dan rincian alokasi belanja yang ditampilkan berstatus simulasi percontohan sebelum pengesahan lembaran Perdes definitif 2026.'
+        }
+      });
+    }
     const budget = await getPrisma().budgetYearData.findFirst({
       orderBy: { year: 'desc' }
     });
@@ -636,40 +784,47 @@ router.get('/transparency', async (req: Request, res: ExpressResponse) => {
         noticeText: 'Data APBDes dan rincian alokasi belanja yang ditampilkan berstatus simulasi percontohan sebelum pengesahan lembaran Perdes definitif 2026.'
       }
     });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: 'Gagal memuat data transparansi anggaran.' });
+  } catch (error: any) {
+    console.warn('⚠️ [PUBLIC-TRANSPARENCY-DEGRADED]:', sanitizeDiagnosticMessage(error?.message || String(error)));
+    const fallbackBudget = allowJsonFallback() ? getDb().budget || null : null;
+    return res.json({
+      success: true,
+      degraded: true,
+      data: {
+        budget: fallbackBudget,
+        isDemoDataNotice: true,
+        noticeText: 'Data APBDes dan rincian alokasi belanja yang ditampilkan berstatus simulasi percontohan sebelum pengesahan lembaran Perdes definitif 2026.'
+      }
+    });
   }
 });
 
 // 14. Officials / Aparatur
 router.get('/officials', async (req: Request, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const fallback = allowJsonFallback() ? (getDb().officials || []).filter((o: any) => o.isActive !== false) : [];
+      return res.json({ success: true, data: fallback, degraded: true });
+    }
     const data = await getPrisma().villageOfficial.findMany({
       where: { isActive: true },
       orderBy: { displayOrder: 'asc' }
     });
     return res.json({ success: true, data });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: 'Gagal memuat daftar aparatur desa.' });
+  } catch (error: any) {
+    console.warn('⚠️ [PUBLIC-OFFICIALS-DEGRADED]:', sanitizeDiagnosticMessage(error?.message || String(error)));
+    const fallback = allowJsonFallback() ? (getDb().officials || []).filter((o: any) => o.isActive !== false) : [];
+    return res.json({ success: true, data: fallback, degraded: true });
   }
 });
 
 // 15. Potentials, UMKM, Facilities, Gallery
 router.get('/kpm', async (req: Request, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      return res.json({ success: true, data: [], degraded: true });
+    }
     const prisma = getPrisma();
-    const list = await prisma.toddlerMeasurement.findMany({
-      include: {
-        toddler: true
-      },
-      take: 50,
-      orderBy: { measurementDate: 'desc' }
-    });
-    
-    // Wait, KPM data is in Resident/BansosRecipients logic from Tier 0.
-    // Let's get real KPM data from Resident table or similar if exists.
-    // In Tier 0, we used api.getKpmData which hits /admin/kpm.
-    // Let's check where the data actually comes from.
     const kpmList = await prisma.resident.findMany({
       where: {
         OR: [
@@ -722,52 +877,76 @@ router.get('/kpm', async (req: Request, res: ExpressResponse) => {
 
     return res.json({ success: true, data: sanitized });
   } catch (error: any) {
-    console.error('❌ [PUBLIC-KPM-ERROR]:', error.message);
-    return res.status(500).json({ success: false, error: 'Gagal memuat data bansos publik.' });
+    console.warn('⚠️ [PUBLIC-KPM-DEGRADED]:', sanitizeDiagnosticMessage(error?.message || String(error)));
+    return res.json({ success: true, data: [], degraded: true });
   }
 });
 
 router.get('/potentials', async (req: Request, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const fallback = allowJsonFallback() ? getDb().potentials || [] : [];
+      return res.json({ success: true, data: fallback, degraded: true });
+    }
     const data = await getPrisma().villagePotential.findMany({
       orderBy: { name: 'asc' }
     });
     return res.json({ success: true, data });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: 'Gagal memuat data potensi desa.' });
+  } catch (error: any) {
+    console.warn('⚠️ [PUBLIC-POTENTIALS-DEGRADED]:', sanitizeDiagnosticMessage(error?.message || String(error)));
+    const fallback = allowJsonFallback() ? getDb().potentials || [] : [];
+    return res.json({ success: true, data: fallback, degraded: true });
   }
 });
 
 router.get('/umkm', async (req: Request, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const fallback = allowJsonFallback() ? getDb().umkm || [] : [];
+      return res.json({ success: true, data: fallback, degraded: true });
+    }
     const data = await getPrisma().umkmItem.findMany({
       orderBy: { name: 'asc' }
     });
     return res.json({ success: true, data });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: 'Gagal memuat daftar UMKM.' });
+  } catch (error: any) {
+    console.warn('⚠️ [PUBLIC-UMKM-DEGRADED]:', sanitizeDiagnosticMessage(error?.message || String(error)));
+    const fallback = allowJsonFallback() ? getDb().umkm || [] : [];
+    return res.json({ success: true, data: fallback, degraded: true });
   }
 });
 
 router.get('/facilities', async (req: Request, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const fallback = allowJsonFallback() ? getDb().facilities || [] : [];
+      return res.json({ success: true, data: fallback, degraded: true });
+    }
     const data = await getPrisma().mapFacility.findMany({
       orderBy: { name: 'asc' }
     });
     return res.json({ success: true, data });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: 'Gagal memuat data fasilitas desa.' });
+  } catch (error: any) {
+    console.warn('⚠️ [PUBLIC-FACILITIES-DEGRADED]:', sanitizeDiagnosticMessage(error?.message || String(error)));
+    const fallback = allowJsonFallback() ? getDb().facilities || [] : [];
+    return res.json({ success: true, data: fallback, degraded: true });
   }
 });
 
 router.get('/gallery', async (req: Request, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const fallback = allowJsonFallback() ? getDb().gallery || [] : [];
+      return res.json({ success: true, data: fallback, degraded: true });
+    }
     const data = await getPrisma().galleryItem.findMany({
       orderBy: { date: 'desc' }
     });
     return res.json({ success: true, data });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: 'Gagal memuat galeri foto.' });
+  } catch (error: any) {
+    console.warn('⚠️ [PUBLIC-GALLERY-DEGRADED]:', sanitizeDiagnosticMessage(error?.message || String(error)));
+    const fallback = allowJsonFallback() ? getDb().gallery || [] : [];
+    return res.json({ success: true, data: fallback, degraded: true });
   }
 });
 
@@ -777,6 +956,13 @@ router.post('/contact', async (req: Request, res: ExpressResponse) => {
     const { name, phone, email, subject, message } = req.body;
     if (!name || !message) {
       return res.status(400).json({ success: false, error: 'Nama dan pesan wajib diisi.' });
+    }
+
+    if (!(await isDatabaseAvailableCached())) {
+      return res.status(503).json({
+        success: false,
+        error: 'Koneksi database belum tersedia. Pesan belum dapat dikirim saat ini.'
+      });
     }
 
     const prisma = getPrisma();
@@ -799,7 +985,7 @@ router.post('/contact', async (req: Request, res: ExpressResponse) => {
       data: { id: newLog.id }
     });
   } catch (error: any) {
-    console.error('❌ [CONTACT-ERROR]:', error.message);
+    console.warn('⚠️ [CONTACT-ERROR]:', sanitizeDiagnosticMessage(error?.message || String(error)));
     return res.status(500).json({ success: false, error: 'Gagal mengirim pesan. Silakan coba lagi.' });
   }
 });
@@ -813,9 +999,18 @@ router.post('/attendance/submit', async (req: Request, res: ExpressResponse) => 
       return res.status(400).json({ success: false, error: 'Harap lengkapi ID Perangkat, PIN, dan Jenis Absensi.' });
     }
 
-    // FIX 9: Validasi selfieUrl harus URL hasil upload internal (public/uploads atau supabase)
-    if (!selfieUrl || (!selfieUrl.includes('/uploads/') && !selfieUrl.includes('.supabase.co'))) {
+    // FIX 9: Validasi selfieUrl harus URL hasil upload internal (public/uploads, private upload, atau supabase)
+    if (
+      !selfieUrl ||
+      (!selfieUrl.includes('/uploads/') &&
+        !selfieUrl.includes('/api/upload/private/') &&
+        !selfieUrl.includes('.supabase.co'))
+    ) {
       return res.status(400).json({ success: false, error: 'Wajib menggunakan foto selfie dari kamera sistem.' });
+    }
+
+    if (!(await isDatabaseAvailableCached())) {
+      return res.status(503).json({ success: false, error: 'Database belum terhubung. Absensi perangkat tidak dapat dicatat saat ini.' });
     }
 
     const prisma = getPrisma();
@@ -945,7 +1140,7 @@ router.post('/attendance/submit', async (req: Request, res: ExpressResponse) => 
       data: newLog
     });
   } catch (error: any) {
-    console.error('❌ [ATTENDANCE-SUBMIT-ERROR]:', error.message);
+    console.warn('⚠️ [ATTENDANCE-SUBMIT-ERROR]:', sanitizeDiagnosticMessage(error?.message || String(error)));
     return res.status(500).json({ success: false, error: 'Gagal mengirim absensi.' });
   }
 });
@@ -953,6 +1148,9 @@ router.post('/attendance/submit', async (req: Request, res: ExpressResponse) => 
 // Get attendance logs for an official (FIX 9: PIN & Lockout)
 router.post('/attendance/history', async (req: Request, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      return res.status(503).json({ success: false, error: 'Database belum terhubung.' });
+    }
     const { officialId, pin } = req.body;
     const prisma = getPrisma();
     const official = await prisma.villageOfficial.findUnique({ where: { id: officialId } });
@@ -970,6 +1168,7 @@ router.post('/attendance/history', async (req: Request, res: ExpressResponse) =>
 
     return res.json({ success: true, data: history });
   } catch (error: any) {
+    console.warn('⚠️ [ATTENDANCE-HISTORY-ERROR]:', sanitizeDiagnosticMessage(error?.message || String(error)));
     return res.status(500).json({ success: false, error: 'Gagal memuat riwayat absensi.' });
   }
 });

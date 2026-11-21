@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { downloadAuthorizedFile } from '../common/ProtectedMedia';
 import {
   Folder,
   FolderOpen,
@@ -789,17 +790,16 @@ export const LetterArchivesManager: React.FC<LetterArchivesManagerProps> = ({
                                         {req.citizenNikMasked}
                                       </span>
                                       {req.ktpAttachmentUrl && (
-                                        <a
-                                          href={req.ktpAttachmentUrl}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
+                                        <button
+                                          type="button"
+                                          onClick={() => downloadAuthorizedFile(req.ktpAttachmentUrl!)}
                                           className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded mt-0.5 hover:bg-emerald-100"
                                           title="Buka Berkas KTP Pemohon"
                                         >
                                           <FileText className="w-2.5 h-2.5 text-emerald-600" />
                                           <span>KTP Terlampir</span>
                                           <ExternalLink className="w-2.5 h-2.5 text-emerald-500" />
-                                        </a>
+                                        </button>
                                       )}
                                     </td>
                                     <td className="p-3 text-slate-600">{req.addressDusun}</td>

@@ -3,6 +3,7 @@ import { VillageOfficial, AttendanceLog } from '../../types';
 import { UserCheck, MapPin, Calendar, Clock, CheckCircle2, ChevronRight, User, Fingerprint, History, X } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { SadewaHouseLogo } from '../common/SadewaHouseLogo';
+import { api } from '../../services/api';
 
 interface AttendanceSystemProps {
   onSuccess?: (log: AttendanceLog) => void;
@@ -16,7 +17,8 @@ export const AttendanceSystem: React.FC<AttendanceSystemProps> = ({ onSuccess })
   const [type, setType] = useState<'masuk' | 'pulang'>('masuk');
   const [isLoading, setIsLoading] = useState(false);
   const [selfie, setSelfie] = useState<string | null>(null);
-  const [isCapturing, setIsCapturing] = useState(false);
+  const [selfiePreview, setSelfiePreview] = useState<string | null>(null);
+  const [isUploadingSelfie, setIsUploadingSelfie] = useState(false);
   const [lastLog, setLastLog] = useState<AttendanceLog | null>(null);
   const [history, setHistory] = useState<AttendanceLog[]>([]);
   const [viewHistory, setViewHistory] = useState(false);
@@ -143,14 +145,33 @@ export const AttendanceSystem: React.FC<AttendanceSystemProps> = ({ onSuccess })
     }
   };
 
-  const handleCapture = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setSelfie(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setSelfiePreview(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+
+    setIsUploadingSelfie(true);
+    try {
+      const res = await api.uploadFileMultipart(file, {
+        module: 'attendance-selfie',
+        fieldName: 'selfie'
+      });
+      if (res.success && res.url) {
+        setSelfie(res.url);
+      } else {
+        setSelfie(null);
+        addToast('error', 'Gagal Unggah Selfie', res.error || 'Foto selfie gagal disimpan ke server.');
+      }
+    } catch {
+      setSelfie(null);
+      addToast('error', 'Gagal Unggah Selfie', 'Koneksi gagal saat menyimpan foto selfie.');
+    } finally {
+      setIsUploadingSelfie(false);
     }
   };
 
@@ -160,6 +181,8 @@ export const AttendanceSystem: React.FC<AttendanceSystemProps> = ({ onSuccess })
     setAuthCode('');
     setLastLog(null);
     setSelfie(null);
+    setSelfiePreview(null);
+    setIsUploadingSelfie(false);
     setViewHistory(false);
   };
 
@@ -287,12 +310,20 @@ export const AttendanceSystem: React.FC<AttendanceSystemProps> = ({ onSuccess })
                 </div>
                 
                 <div className="relative group">
-                  {selfie ? (
+                  {selfiePreview || selfie ? (
                     <div className="relative h-48 w-full rounded-xl overflow-hidden border-2 border-emerald-500 shadow-md">
-                      <img src={selfie} alt="Selfie Capture" className="w-full h-full object-cover" />
+                      <img src={selfiePreview || selfie || ''} alt="Selfie Capture" className="w-full h-full object-cover" />
+                      {isUploadingSelfie && (
+                        <div className="absolute inset-0 bg-slate-900/50 flex items-center justify-center text-white text-xs font-bold">
+                          Menyimpan foto selfie...
+                        </div>
+                      )}
                       <button
                         type="button"
-                        onClick={() => setSelfie(null)}
+                        onClick={() => {
+                          setSelfie(null);
+                          setSelfiePreview(null);
+                        }}
                         className="absolute top-2 right-2 bg-rose-600 text-white p-2 rounded-full shadow-lg hover:bg-rose-700 transition-colors"
                       >
                         <X className="w-4 h-4" />
@@ -307,7 +338,7 @@ export const AttendanceSystem: React.FC<AttendanceSystemProps> = ({ onSuccess })
                     </div>
                   )}
                   
-                  {!selfie && (
+                  {!selfiePreview && !selfie && (
                     <label className="absolute inset-0 cursor-pointer flex items-center justify-center">
                       <input 
                         type="file" 
@@ -327,13 +358,13 @@ export const AttendanceSystem: React.FC<AttendanceSystemProps> = ({ onSuccess })
 
               <button
                 onClick={handleVerifyAndSubmit}
-                disabled={isLoading || !selfie}
+                disabled={isLoading || isUploadingSelfie || !selfie}
                 className="w-full py-4 px-6 bg-slate-900 hover:bg-black text-white font-black text-sm rounded-2xl shadow-xl transition-all flex items-center justify-center gap-2 group disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isLoading ? (
+                {isLoading || isUploadingSelfie ? (
                   <>
                     <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    <span>MEMPROSES...</span>
+                    <span>{isUploadingSelfie ? 'MENGUNGGAH SELFIE...' : 'MEMPROSES...'}</span>
                   </>
                 ) : (
                   <>

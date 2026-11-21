@@ -98,7 +98,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
   const [villageLogoError, setVillageLogoError] = useState(false);
   const [sadewaLogoError, setSadewaLogoError] = useState(false);
   const userRole = currentUser?.role || 'operator';
-  const userPermissions = currentUser?.permissions || {};
+  const userPermissions = currentUser?.permissions;
   const isSuperAdmin = userRole.toLowerCase().includes('super');
 
   // Helper to check if a user has access to a specific item
@@ -106,8 +106,9 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
     // 1. Super Admin has access to EVERYTHING
     if (isSuperAdmin) return true;
 
-    // 2. Explicit Permission Override (Checklist support)
-    if (userPermissions[item.id] === true) return true;
+    // 2. Explicit Permission Override (Array string[] or Checklist object support)
+    if (Array.isArray(userPermissions) && userPermissions.includes(item.id)) return true;
+    if (userPermissions && !Array.isArray(userPermissions) && (userPermissions as Record<string, boolean>)[item.id] === true) return true;
 
     // 3. Role-Based Default Logic
     switch (userRole) {

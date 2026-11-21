@@ -113,6 +113,10 @@ export const VillageProfileManager: React.FC = () => {
   const [activeSubTab, setActiveSubTab] = useState<'identitas' | 'kontak' | 'logo' | 'visi_misi' | 'sambutan'>('identitas');
   const [isSaving, setIsSaving] = useState(false);
   const [uploadingTarget, setUploadingTarget] = useState<'village' | 'regency' | 'signature' | 'kades' | 'sadewa' | 'sadewaIcon' | null>(null);
+  const [showDangerConfirm, setShowDangerConfirm] = useState(false);
+  const [dangerConfirmText, setDangerConfirmText] = useState('');
+  const [dangerPassword, setDangerPassword] = useState('');
+  const [isResettingDanger, setIsResettingDanger] = useState(false);
 
   // New item inputs
   const [newMissionItem, setNewMissionItem] = useState('');
@@ -1349,28 +1353,71 @@ export const VillageProfileManager: React.FC = () => {
             <p className="text-xs text-rose-800/80 max-w-2xl leading-relaxed font-medium">
               Tindakan di bawah ini akan <strong>menghapus seluruh data pengujian/dummy</strong> yang ada di sistem SADEWA (Termasuk data permohonan surat, berita, aparatur dummy, keluhan, dll). Hanya jalankan ini jika Anda bersiap untuk <strong>Go-Live / Peluncuran Resmi</strong> ke server produksi dengan domain asli.
             </p>
-            <button
-              type="button"
-              onClick={() => {
-                const confirmed = window.confirm('⚠️ PERINGATAN KRITIS: Anda yakin ingin menghapus SELURUH data dummy sistem? Tindakan ini TIDAK BISA dibatalkan.');
-                if (confirmed) {
-                  const finalConfirm = window.prompt('Ketik "RESET" untuk melanjutkan:');
-                  if (finalConfirm === 'RESET') {
-                    resetAllDataToDefault();
-                    addToast('success', 'Sistem Di-reset', 'Seluruh data demo telah dihapus. Sistem siap untuk Go-Live.');
-                    setTimeout(() => {
-                       window.location.reload();
-                    }, 1500);
-                  } else {
-                    addToast('info', 'Dibatalkan', 'Kode salah. Reset data dibatalkan demi keamanan.');
-                  }
-                }
-              }}
-              className="mt-4 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl flex items-center space-x-2 transition-all shadow-sm cursor-pointer"
-            >
-              <Trash2 className="w-4 h-4" />
-              <span>Format & Bersihkan Sistem (Persiapan Go-Live)</span>
-            </button>
+            {!showDangerConfirm ? (
+              <button
+                type="button"
+                onClick={() => setShowDangerConfirm(true)}
+                className="mt-4 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl flex items-center space-x-2 transition-all shadow-sm cursor-pointer"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Format & Bersihkan Sistem (Persiapan Go-Live)</span>
+              </button>
+            ) : (
+              <div className="mt-4 p-4 rounded-2xl bg-white border border-rose-200 max-w-md space-y-3">
+                <p className="text-xs font-bold text-rose-800">Konfirmasi Keamanan Reset Sistem</p>
+                <input
+                  type="text"
+                  value={dangerConfirmText}
+                  onChange={(e) => setDangerConfirmText(e.target.value)}
+                  placeholder='Ketik "RESET"'
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-rose-200 focus:border-rose-500 outline-none font-bold uppercase"
+                />
+                <input
+                  type="password"
+                  value={dangerPassword}
+                  onChange={(e) => setDangerPassword(e.target.value)}
+                  placeholder="Password Super Admin"
+                  autoComplete="current-password"
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-rose-200 focus:border-rose-500 outline-none"
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowDangerConfirm(false);
+                      setDangerConfirmText('');
+                      setDangerPassword('');
+                    }}
+                    className="px-3 py-2 rounded-xl border border-slate-200 text-slate-600 text-xs font-bold cursor-pointer"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isResettingDanger || dangerConfirmText !== 'RESET' || !dangerPassword.trim()}
+                    onClick={async () => {
+                      setIsResettingDanger(true);
+                      const result = await resetAllDataToDefault(dangerPassword, dangerConfirmText);
+                      setIsResettingDanger(false);
+                      if (result.success) {
+                        setDangerPassword('');
+                        setDangerConfirmText('');
+                        setShowDangerConfirm(false);
+                        addToast('success', 'Sistem Di-reset', 'Seluruh data demo telah dihapus. Sistem siap untuk Go-Live.');
+                        setTimeout(() => {
+                          window.location.reload();
+                        }, 1500);
+                      } else {
+                        addToast('error', 'Reset Gagal', result.error || 'Otorisasi gagal.');
+                      }
+                    }}
+                    className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:bg-slate-200 disabled:text-slate-400 text-white text-xs font-bold cursor-pointer"
+                  >
+                    {isResettingDanger ? 'Memproses...' : 'Eksekusi Reset'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

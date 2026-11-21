@@ -699,6 +699,19 @@ export const api = {
     }
   },
 
+  async addKpm(data: any): Promise<{ success: boolean; data?: any; error?: string }> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/kpm`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(data)
+      });
+      return processResponse(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
   async updateKpm(id: string, data: any): Promise<{ success: boolean; data?: any; error?: string }> {
     try {
       const res = await fetch(`${BASE_URL}/admin/kpm/${encodeURIComponent(id)}`, {
@@ -909,6 +922,19 @@ export const api = {
     }
   },
 
+  async toggleComplaintVisibility(id: string, isPublic: boolean): Promise<{ success: boolean; data?: Complaint; error?: string }> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/complaints/${encodeURIComponent(id)}/visibility`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ isPublic })
+      });
+      return processResponse<Complaint>(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
   async addNews(article: Partial<NewsItem>): Promise<{ success: boolean; data?: NewsItem; error?: string }> {
     try {
       const res = await fetch(`${BASE_URL}/admin/news`, {
@@ -1010,6 +1036,19 @@ export const api = {
     }
   },
 
+  async updateAgenda(id: string, updates: Partial<AgendaItem>): Promise<{ success: boolean; data?: AgendaItem; error?: string }> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/agendas/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(updates)
+      });
+      return processResponse<AgendaItem>(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
   async deleteAgenda(id: string): Promise<{ success: boolean; error?: string }> {
     try {
       const res = await fetch(`${BASE_URL}/admin/agendas/${id}`, {
@@ -1067,6 +1106,65 @@ export const api = {
     }
   },
 
+  async updateUmkm(id: string, updates: Partial<UmkmItem>): Promise<{ success: boolean; data?: UmkmItem; error?: string }> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/umkm/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(updates)
+      });
+      return processResponse<UmkmItem>(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async getAttendanceLogs(): Promise<ApiResponse<any[]>> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/attendance/all`, {
+        headers: getAuthHeaders()
+      });
+      return processResponse<any[]>(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async getBudgets(): Promise<ApiResponse<BudgetYearData[]>> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/budget`, {
+        headers: getAuthHeaders()
+      });
+      return processResponse<BudgetYearData[]>(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async updateBudget(data: BudgetYearData): Promise<ApiResponse<BudgetYearData>> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/budget`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(data)
+      });
+      return processResponse<BudgetYearData>(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async getAdminPanelMap(): Promise<ApiResponse<any>> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/panel-map`, {
+        headers: getAuthHeaders()
+      });
+      return processResponse<any>(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
   async getAuditLogs(): Promise<AuditLog[]> {
     try {
       const res = await fetch(`${BASE_URL}/admin/audit-logs`, {
@@ -1080,11 +1178,12 @@ export const api = {
     }
   },
 
-  async resetDatabase(): Promise<{ success: boolean; message?: string; error?: string }> {
+  async resetDatabase(adminPassword: string, confirmationText = 'HAPUS SEMUA DATA'): Promise<{ success: boolean; message?: string; error?: string }> {
     try {
       const res = await fetch(`${BASE_URL}/admin/reset-database`, {
         method: 'POST',
-        headers: getAuthHeaders()
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ adminPassword, confirmationText })
       });
       const json = await res.json();
       return { success: res.ok && json.success, message: json.message, error: json.error };

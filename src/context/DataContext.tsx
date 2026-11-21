@@ -167,7 +167,7 @@ export interface DataContextType {
   updateFacility: (id: string, item: Partial<MapFacility>) => void;
   deleteFacility: (id: string) => void;
   updateUserRole: (userId: string, role: RoleType) => void;
-  resetAllDataToDefault: () => void;
+  resetAllDataToDefault: (adminPassword: string, confirmationText?: string) => Promise<{ success: boolean; error?: string }>;
   logActivity: (action: string, module: string, details: string) => void;
   addLandParcel: (data: any) => Promise<void>;
   updateLandParcel: (id: string, data: any) => Promise<void>;
@@ -182,7 +182,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const queryClient = useQueryClient();
   const [isLoading, setIsLoading] = useState(true);
 
-  const { serviceRequests, setServiceRequests, deletedRequests, setDeletedRequests, addServiceRequest, updateServiceRequest, deleteServiceRequest: fbDeleteServiceRequest, findRequestByCode } = useServiceRequests();
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('pulau_betung_auth_token') : null;
     if (!token) {
@@ -191,6 +190,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     return loadStored('current_user', null);
   });
+  const { serviceRequests, setServiceRequests, deletedRequests, setDeletedRequests, addServiceRequest, updateServiceRequest, deleteServiceRequest: fbDeleteServiceRequest, findRequestByCode } = useServiceRequests(currentUser);
   const [users, setUsers] = useState<User[]>([]);
   const [services, setServices] = useState<VillageService[]>(INITIAL_SERVICES);
   
@@ -537,6 +537,17 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
               } catch (delErr) {
                 console.warn('Deleted requests sync notice:', delErr);
               }
+
+              // Sync APBDes budget history from server
+              try {
+                const budgetRes = await api.getBudgets();
+                if (budgetRes.success && Array.isArray(budgetRes.data) && budgetRes.data.length > 0) {
+                  setBudgetHistory(budgetRes.data);
+                  setBudget(budgetRes.data[0]);
+                }
+              } catch (budgetErr) {
+                console.warn('Budget sync notice:', budgetErr);
+              }
             }
           } else {
             // Only logout if we are absolutely sure the session is invalid
@@ -578,6 +589,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return [updatedData, ...prev];
     });
     logActivity('BUDGET_UPDATED', 'Transparansi APBDes', `Update APBDes TA ${updatedData.year}`);
+    api.updateBudget(updatedData).catch((err) => {
+      console.warn('Gagal menyinkronkan APBDes ke server:', err);
+    });
   }, [logActivity]);
 
   // ============================================================================
@@ -1004,6 +1018,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const updateAgendaItem = useCallback((id: string, item: Partial<AgendaItem>) => {
     setAgendas((prev) => prev.map((a) => (a.id === id ? { ...a, ...item } : a)));
+    api.updateAgenda(id, item).catch((err) => {
+      console.warn('Gagal menyinkronkan agenda ke server:', err);
+    });
   }, []);
 
   const deleteAgendaItem = useCallback((id: string) => {
@@ -1266,17 +1283,28 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     try {
       const now = new Date().toISOString();
-      // Placeholder for actual API call if needed, currently using state + log
+      const tempId = 'kpm-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7);
       const newRecipient: BansosRecipient = {
         ...item,
-        id: 'kpm-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7),
+        id: tempId,
         createdAt: now,
         updatedAt: now
       };
 
       setBansosRecipients(prev => [newRecipient, ...prev]);
       logActivity('BANSOS_RECIPIENT_ADDED', 'Bantuan Sosial', `Tambah penerima bansos: ${item.name} (${item.programName})`);
-      
+
+      // Sync with Backend API -> Prisma / JSON fallback
+      api.addKpm(newRecipient).then((res) => {
+        if (res.success && res.data?.id && res.data.id !== tempId) {
+          setBansosRecipients(prev => prev.map(r => (r.id === tempId ? { ...r, id: res.data.id } : r)));
+        } else if (!res.success) {
+          console.warn('Sinkronisasi tambah KPM ke server:', res.error);
+        }
+      }).catch((err) => {
+        console.warn('Gagal sinkronisasi tambah KPM:', err);
+      });
+
       // Invalidate Query Cache
       queryClient.invalidateQueries({ queryKey: ['kpm_bansos'] });
     } catch (error: any) {
@@ -1309,6 +1337,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const now = new Date().toISOString();
       setBansosRecipients(prev => prev.map(r => r.id === id ? { ...r, ...item, updatedAt: now } : r));
       logActivity('BANSOS_RECIPIENT_UPDATED', 'Bantuan Sosial', `Update penerima bansos ID: ${id}`);
+      api.updateKpm(id, item).catch((err) => {
+        console.warn('Gagal sinkronisasi update KPM:', err);
+      });
       queryClient.invalidateQueries({ queryKey: ['kpm_bansos'] });
     } catch (error: any) {
       console.error('Error updating bansos recipient:', error);
@@ -1320,6 +1351,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       setBansosRecipients(prev => prev.filter(r => r.id !== id));
       logActivity('BANSOS_RECIPIENT_DELETED', 'Bantuan Sosial', `Hapus penerima bansos ID: ${id}`);
+      api.deleteKpm(id).catch((err) => {
+        console.warn('Gagal sinkronisasi hapus KPM:', err);
+      });
       queryClient.invalidateQueries({ queryKey: ['kpm_bansos'] });
     } catch (error: any) {
       console.error('Error deleting bansos recipient:', error);
@@ -1358,7 +1392,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [logActivity]);
 
-  const resetAllDataToDefault = useCallback(() => {
+  const resetAllDataToDefault = useCallback(async (adminPassword: string, confirmationText = 'RESET'): Promise<{ success: boolean; error?: string }> => {
+    const res = await api.resetDatabase(adminPassword, confirmationText);
+    if (!res.success) {
+      return { success: false, error: res.error || 'Otorisasi reset database gagal.' };
+    }
+
     Object.keys(localStorage).filter(k => k.startsWith(LOCAL_STORAGE_PREFIX)).forEach(k => localStorage.removeItem(k));
     
     // Keep only the first Super Admin
@@ -1367,7 +1406,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Services are templates, keep them
     setServices(INITIAL_SERVICES);
     
-    // Wipe all other data
+    // Wipe operational data
     setServiceRequests([]);
     setComplaints([]);
     setNews([]);
@@ -1379,7 +1418,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUmkm([]);
     setOfficials([]);
     setFacilities([]);
-    setAuditLogs([]);
     setTerritories([]);
     setBansosRecipients(INITIAL_BANSOS_RECIPIENTS);
     setBansosComplaints(INITIAL_BANSOS_COMPLAINTS);
@@ -1427,7 +1465,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       lastUpdated: new Date().toISOString()
     } as VillageProfile);
 
-    api.resetDatabase();
+    return { success: true };
   }, []);
 
   const deleteLandParcel = useCallback(async (id: string) => {

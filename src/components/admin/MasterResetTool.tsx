@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ShieldAlert, Trash2, Loader2, AlertTriangle, RefreshCcw } from 'lucide-react';
+import { ShieldAlert, Trash2, Loader2, AlertTriangle, RefreshCcw, Lock } from 'lucide-react';
 import { useMasterReset } from '../../hooks/useMasterReset';
 import { useApp } from '../../context/AppContext';
 
@@ -7,6 +7,7 @@ export const MasterResetTool: React.FC = () => {
   const { performMasterReset, isResetting, resetProgress } = useMasterReset();
   const { addToast } = useApp();
   const [confirmText, setConfirmText] = useState('');
+  const [adminPassword, setAdminPassword] = useState('');
   const [showConfirm, setShowConfirm] = useState(false);
 
   const handleReset = async () => {
@@ -15,10 +16,16 @@ export const MasterResetTool: React.FC = () => {
       return;
     }
 
-    const result = await performMasterReset();
+    if (!adminPassword.trim()) {
+      addToast('error', 'Otorisasi Diperlukan', 'Masukkan password Super Admin Anda untuk melanjutkan.');
+      return;
+    }
+
+    const result = await performMasterReset(adminPassword, confirmText);
     if (result.success) {
-      addToast('success', 'Reset Berhasil', 'Seluruh data dummy telah dibersihkan. Sistem siap untuk uji coba real.');
-      // Reload page to refresh all contexts
+      setAdminPassword('');
+      setConfirmText('');
+      addToast('success', 'Reset Berhasil', 'Seluruh data dummy telah dibersihkan. Log audit tetap dipertahankan.');
       setTimeout(() => {
         window.location.reload();
       }, 2000);
@@ -55,7 +62,7 @@ export const MasterResetTool: React.FC = () => {
                 'Seluruh Data Posyandu & Stunting akan dibersihkan.',
                 'Semua Arsip Surat & Permohonan Online akan dihapus.',
                 'Berita, Pengumuman, Agenda, & Proyek Desa akan direset.',
-                'Log Audit Keamanan akan dikosongkan.',
+                'Log Audit Keamanan tetap dipertahankan sebagai jejak keamanan.',
               ].map((item, idx) => (
                 <li key={idx} className="flex items-start gap-2 text-xs text-slate-600">
                   <div className="w-1.5 h-1.5 rounded-full bg-rose-400 mt-1.5 shrink-0" />
@@ -67,7 +74,7 @@ export const MasterResetTool: React.FC = () => {
             <div className="p-4 rounded-2xl bg-amber-50 border border-amber-100 flex gap-3">
               <RefreshCcw className="w-5 h-5 text-amber-600 shrink-0" />
               <div className="text-[11px] text-amber-800 leading-relaxed">
-                <span className="font-bold">Informasi:</span> Kami akan tetap mempertahankan akun Administrator (Login) dan Profil Identitas Desa agar Anda tetap dapat mengelola sistem tanpa perlu setup ulang.
+                <span className="font-bold">Informasi:</span> Kami akan tetap mempertahankan akun Administrator (Login), Log Audit Keamanan, dan Profil Identitas Desa agar Anda tetap dapat mengelola sistem tanpa perlu setup ulang.
               </div>
             </div>
           </div>
@@ -95,21 +102,40 @@ export const MasterResetTool: React.FC = () => {
                     placeholder="HAPUS SEMUA DATA"
                     className="w-full px-4 py-3 rounded-xl border-2 border-rose-200 focus:border-rose-500 outline-none transition-all font-bold text-center uppercase"
                   />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
+                    <Lock className="w-3 h-3 text-rose-500" />
+                    <span>Password Super Admin</span>
+                  </label>
+                  <input
+                    type="password"
+                    value={adminPassword}
+                    onChange={(e) => setAdminPassword(e.target.value)}
+                    placeholder="Masukkan password akun Anda"
+                    autoComplete="current-password"
+                    className="w-full px-4 py-3 rounded-xl border-2 border-rose-200 focus:border-rose-500 outline-none transition-all text-sm font-medium bg-white"
+                  />
                   <p className="text-[10px] text-rose-600 text-center font-bold">Tindakan ini tidak dapat dibatalkan!</p>
                 </div>
 
                 <div className="flex gap-2">
                   <button
-                    onClick={() => setShowConfirm(false)}
+                    onClick={() => {
+                      setShowConfirm(false);
+                      setConfirmText('');
+                      setAdminPassword('');
+                    }}
                     className="flex-1 py-3 rounded-xl bg-white border border-slate-300 text-slate-600 font-bold text-xs"
                   >
                     Batal
                   </button>
                   <button
                     onClick={handleReset}
-                    disabled={isResetting || confirmText !== 'HAPUS SEMUA DATA'}
+                    disabled={isResetting || confirmText !== 'HAPUS SEMUA DATA' || !adminPassword.trim()}
                     className={`flex-[2] py-3 rounded-xl font-black text-xs flex items-center justify-center gap-2 transition-all ${
-                      isResetting || confirmText !== 'HAPUS SEMUA DATA'
+                      isResetting || confirmText !== 'HAPUS SEMUA DATA' || !adminPassword.trim()
                         ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
                         : 'bg-rose-600 text-white hover:bg-rose-700 shadow-md'
                     }`}

@@ -7,7 +7,7 @@ if (process.env.DATABASE_URL) {
 }
 import { hashPassword, generateSalt } from '../auth';
 import { executeDualWriteSync } from './sync/syncEngine';
-import { getPrisma } from './prisma-helpers';
+import { getPrisma, isDatabaseAvailableCached } from './prisma-helpers';
 import { sanitizeDiagnosticMessage } from './connection-diagnostic';
 import {
   INITIAL_USERS,
@@ -103,7 +103,9 @@ export interface VillageProfileRecord {
   heroBadgeText?: string;
   heroIsActive?: boolean;
   // SADEWA System Identity
+  villageLogoSecondaryUrl?: string;
   sadewaLogoUrl?: string;
+  sadewaIconUrl?: string;
   // Master Kontak & Jam Operasional
   whatsappCenter?: string;
   operatingHours?: {
@@ -130,6 +132,7 @@ export interface DatabaseSchema {
   agendas: any[];
   developmentProjects: any[];
   budget: any;
+  budgetHistory?: any[];
   officials: any[];
   potentials: any[];
   umkm: any[];
@@ -138,6 +141,10 @@ export interface DatabaseSchema {
   auditLogs: any[];
   attendance: any[];
   deletedServiceRequests: any[];
+  residents?: any[];
+  kpm?: any[];
+  toddlers?: any[];
+  landParcels?: any[];
   villageProfile: VillageProfileRecord;
   territories: DusunRecord[];
 }
@@ -365,9 +372,29 @@ export function getDb(): DatabaseSchema {
         hasUpdates = true;
       }
 
-      // Auto-migrate: ensure deletedServiceRequests table exists
+      // Auto-migrate: ensure deletedServiceRequests & unified admin fallback tables exist
       if (!dbInstance!.deletedServiceRequests || !Array.isArray(dbInstance!.deletedServiceRequests)) {
         dbInstance!.deletedServiceRequests = [];
+        hasUpdates = true;
+      }
+      if (!Array.isArray(dbInstance!.budgetHistory)) {
+        dbInstance!.budgetHistory = dbInstance!.budget ? [dbInstance!.budget] : [];
+        hasUpdates = true;
+      }
+      if (!Array.isArray(dbInstance!.residents)) {
+        dbInstance!.residents = [];
+        hasUpdates = true;
+      }
+      if (!Array.isArray(dbInstance!.kpm)) {
+        dbInstance!.kpm = [];
+        hasUpdates = true;
+      }
+      if (!Array.isArray(dbInstance!.toddlers)) {
+        dbInstance!.toddlers = [];
+        hasUpdates = true;
+      }
+      if (!Array.isArray(dbInstance!.landParcels)) {
+        dbInstance!.landParcels = [];
         hasUpdates = true;
       }
 
@@ -518,7 +545,7 @@ export class PostgresPrismaAdapter implements IDatabaseAdapter {
   private fallback = new JsonFileDatabaseAdapter();
 
   async getDb(): Promise<DatabaseSchema> {
-    if (!process.env.DATABASE_URL) {
+    if (!process.env.DATABASE_URL || !(await isDatabaseAvailableCached())) {
       return this.fallback.getDb();
     }
 

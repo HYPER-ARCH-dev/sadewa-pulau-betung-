@@ -481,10 +481,11 @@ async function main() {
   if (dbData.budget) {
     console.log('💰 Seeding APBDes Budget...');
     const b = dbData.budget;
+    const docType = b.documentType || 'murni';
     await prisma.budgetYearData.upsert({
-      where: { year: b.year || 2026 },
+      where: { year_documentType: { year: b.year || 2026, documentType: docType } },
       update: {
-        documentType: b.documentType || 'murni',
+        documentType: docType,
         status: b.status || 'BERLAKU',
         legalRefNumber: b.legalRefNumber,
         enactmentDate: b.enactmentDate ? new Date(b.enactmentDate) : undefined,

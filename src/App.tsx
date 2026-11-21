@@ -274,11 +274,6 @@ const MainContent: React.FC = () => {
           letterNumber: targetNoSurat
         });
       }
-
-      // 4. Temporary Internal Route for Playground
-      if (pathname === '/test-form') {
-        navigateTo('test_form' as any);
-      }
     }
   }, []);
 
@@ -431,7 +426,7 @@ const MainContent: React.FC = () => {
         }
         return <AdminDashboard />;
       case 'test_form' as any:
-        return <TestDynamicForm />;
+        return currentUser?.role === 'super_admin' ? <TestDynamicForm /> : <HomeView />;
       default:
         return <HomeView />;
     }

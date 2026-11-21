@@ -5,18 +5,18 @@ export const useMasterReset = () => {
   const [isResetting, setIsResetting] = useState(false);
   const [resetProgress, setResetProgress] = useState(0);
 
-  const performMasterReset = async () => {
+  const performMasterReset = async (adminPassword: string, confirmationText: string) => {
     setIsResetting(true);
     setResetProgress(0);
-    
+
     try {
       setResetProgress(20);
-      
-      // Memanggil API Admin untuk reset seluruh data di backend Express
-      const serverReset = await api.resetDatabase();
-      
+
+      // Memanggil API Admin untuk reset seluruh data di backend Express dengan otorisasi password
+      const serverReset = await api.resetDatabase(adminPassword, confirmationText);
+
       setResetProgress(80);
-      
+
       if (!serverReset.success) {
         throw new Error(serverReset.error || 'Gagal reset database server.');
       }

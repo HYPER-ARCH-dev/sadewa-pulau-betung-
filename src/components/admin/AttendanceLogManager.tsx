@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { AuthorizedImage } from '../common/ProtectedMedia';
+import { api } from '../../services/api';
 
 export const AttendanceLogManager: React.FC = () => {
   const { officials } = useApp();
@@ -35,9 +36,8 @@ export const AttendanceLogManager: React.FC = () => {
   const fetchLogs = async () => {
     setIsLoading(true);
     try {
-      const response = await fetch('/api/admin/attendance/all');
-      const result = await response.json();
-      if (result.success) {
+      const result = await api.getAttendanceLogs();
+      if (result.success && Array.isArray(result.data)) {
         setLogs(result.data);
       }
     } catch (err) {

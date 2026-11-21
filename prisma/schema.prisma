@@ -366,7 +366,7 @@ model GalleryItem {
 // 7. APBDES & TRANSPARANSI ANGGARAN
 model BudgetYearData {
   id                       String   @id @default(cuid())
-  year                     Int      @unique
+  year                     Int
   documentType             String   @default("murni") // murni | perubahan
   status                   String   @default("BERLAKU") // DRAFT | DIPROSES | DISAHKAN_BPD | BERLAKU
   legalRefNumber           String?
@@ -386,6 +386,8 @@ model BudgetYearData {
   publicDocuments          Json     // Public documents list
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt
+
+  @@unique([year, documentType])
 }
 
 // 8. PEMBANGUNAN & INFRASTRUKTUR DESA

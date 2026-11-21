@@ -17,6 +17,7 @@
 import crypto from 'crypto';
 import { Request, Response, NextFunction, RequestHandler } from 'express';
 import { getUserById } from './db/prisma-helpers';
+import { sanitizeDiagnosticMessage } from './db/connection-diagnostic';
 
 // Kunci rahasia darurat untuk mode pengembangan jika developer belum membuat SESSION_SECRET di .env
 let devFallbackSecret: string | null = null;
@@ -193,7 +194,7 @@ export const authenticateToken: RequestHandler = async (req: Request, res: Respo
     authReq.user = { ...payload, role: user.role as any };
     next();
   } catch (error: any) {
-    console.error('⚠️ [AUTH-MIDDLEWARE-ERROR]:', error.message);
+    console.warn('⚠️ [AUTH-MIDDLEWARE-ERROR]:', sanitizeDiagnosticMessage(error?.message || String(error)));
     res.status(503).json({ success: false, error: 'Layanan autentikasi sedang gangguan (Database Offline).' });
     return;
   }

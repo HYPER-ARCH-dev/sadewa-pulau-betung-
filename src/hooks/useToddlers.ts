@@ -1,21 +1,24 @@
 import { useState, useEffect, useCallback } from 'react';
 import { ToddlerRecord } from '../types/posyandu';
 import { api } from '../services/api';
+import { useApp } from '../context/AppContext';
 
 export const useToddlers = () => {
+  const { currentUser, isLoading: isAppLoading } = useApp();
   const [toddlers, setToddlers] = useState<ToddlerRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isAuthed, setIsAuthed] = useState(false);
-
-  // Auth check via JWT Token
-  useEffect(() => {
-    const token = localStorage.getItem('pulau_betung_auth_token');
-    setIsAuthed(!!token);
-  }, []);
 
   const fetchToddlers = useCallback(async () => {
-    if (!isAuthed) {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('pulau_betung_auth_token') : null;
+    const isAuthorized =
+      !!token &&
+      !!currentUser &&
+      ['super_admin', 'admin_desa', 'operator', 'admin_posyandu'].includes(currentUser.role);
+
+    if (isAppLoading) return;
+
+    if (!isAuthorized) {
       setLoading(false);
       setToddlers([]);
       return;
@@ -36,7 +39,7 @@ export const useToddlers = () => {
     } finally {
       setLoading(false);
     }
-  }, [isAuthed]);
+  }, [currentUser, isAppLoading]);
 
   useEffect(() => {
     fetchToddlers();
@@ -61,14 +64,14 @@ export const useToddlers = () => {
     return res;
   };
 
-  return { 
-    toddlers, 
-    loading, 
+  return {
+    toddlers,
+    loading,
     error,
     refreshToddlers: fetchToddlers,
     seedInitialData: fetchToddlers,
-    addToddler, 
-    updateToddler, 
-    deleteToddler 
+    addToddler,
+    updateToddler,
+    deleteToddler
   };
 };

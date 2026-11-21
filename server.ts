@@ -21,12 +21,8 @@ import { createServer as createViteServer } from 'vite';
 import { getSessionSecret } from './server/auth';
 import { createApiApp } from './server/app';
 import { getDb } from './server/db/database';
+import { runDatabaseBackup } from './server/scripts/db-backup';
 import cron from 'node-cron';
-import { exec } from 'child_process';
-import util from 'util';
-
-// Mengubah fungsi exec jadul (callback) jadi Promise biar bisa kita 'await' dengan rapi
-const execPromise = util.promisify(exec);
 
 /**
  * Fungsi utama untuk menyalakan server dari nol hingga siap melayani warga.
@@ -105,11 +101,10 @@ async function startServer() {
     cron.schedule('0 2 * * *', async () => {
       console.log('⏰ [CRON-BACKUP] Memulai proses backup database terjadwal (02:00 AM)...');
       try {
-        const scriptPath = path.join(process.cwd(), 'server', 'scripts', 'db-backup.ts');
-        await execPromise(`npx tsx ${scriptPath}`);
-        console.log('✅ [CRON-BACKUP] Sukses: Backup database harian berhasil disimpan.');
+        const result = await runDatabaseBackup();
+        console.log(`✅ [CRON-BACKUP] Sukses (${result.mode}): ${result.fileName} berhasil disimpan.`);
       } catch (err: any) {
-        console.error('❌ [CRON-BACKUP] Gagal:', err.message);
+        console.error('❌ [CRON-BACKUP] Gagal:', err?.message || err);
       }
     }, {
       timezone: "Asia/Jakarta"

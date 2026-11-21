@@ -12,7 +12,7 @@ import rateLimit from 'express-rate-limit';
 import path from 'path';
 import fs from 'fs';
 import { getSessionSecret } from './auth';
-import { getPrisma } from './db/prisma-helpers';
+import { probeDatabaseStatus } from './db/prisma-helpers';
 import { sanitizeDiagnosticMessage } from './db/connection-diagnostic';
 import authRouter from './routes/auth';
 import publicRouter from './routes/public';
@@ -126,26 +126,10 @@ export function createApiApp(): express.Express {
     const dbUrl = process.env.DATABASE_URL || '';
     const directUrl = process.env.DIRECT_URL || '';
 
-    let dbReachable = false;
-    let dbErrorCode: string | null = null;
-    let dbErrorSummary: string | null = null;
-
-    if (dbUrl) {
-      try {
-        await getPrisma().$queryRawUnsafe('SELECT 1');
-        dbReachable = true;
-      } catch (err: any) {
-        dbReachable = false;
-        dbErrorCode = typeof err?.code === 'string' ? err.code : (typeof err?.errorCode === 'string' ? err.errorCode : 'DB_ERROR');
-        dbErrorSummary = sanitizeDiagnosticMessage(
-          String(err?.message || 'Database connection failed'),
-          [dbUrl, directUrl, process.env.SESSION_SECRET]
-        );
-      }
-    } else {
-      dbErrorCode = 'MISSING_DATABASE_URL';
-      dbErrorSummary = 'DATABASE_URL environment variable is not defined.';
-    }
+    const dbProbe = await probeDatabaseStatus(30000);
+    const dbReachable = dbProbe.reachable;
+    const dbErrorCode = dbProbe.errorCode;
+    const dbErrorSummary = dbProbe.errorSummary;
 
     res.json({
       status: 'ok',

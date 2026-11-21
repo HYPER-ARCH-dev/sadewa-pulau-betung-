@@ -9,8 +9,30 @@ import { sanitizeDiagnosticMessage } from './connection-diagnostic';
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
   lastSanitizedPrismaWarnAt?: number;
-  dbAvailabilityCache?: { reachable: boolean; checkedAt: number };
+  lastOfflineNoticeAt?: number;
+  isProbingDb?: boolean;
+  dbAvailabilityCache?: {
+    reachable: boolean;
+    checkedAt: number;
+    errorCode: string | null;
+    errorSummary: string | null;
+  };
 };
+
+function isConnectivityErrorMessage(msg: string): boolean {
+  const lower = msg.toLowerCase();
+  return (
+    lower.includes('enotfound') ||
+    lower.includes('econnrefused') ||
+    lower.includes('etimedout') ||
+    lower.includes('tenant/user') ||
+    lower.includes("can't reach database server") ||
+    lower.includes('connection terminated') ||
+    lower.includes('p1000') ||
+    lower.includes('p1001') ||
+    lower.includes('p1002')
+  );
+}
 
 /**
  * 🔌 Ambil Koneksi Prisma
@@ -31,10 +53,22 @@ export function getPrisma(): PrismaClient {
       log: [{ emit: 'event', level: 'error' }]
     });
     (client as any).$on?.('error', (event: any) => {
+      // Selama health/availability probe aktif, error ditangani secara senyap oleh try/catch pemanggil
+      if (globalForPrisma.isProbingDb) {
+        return;
+      }
+      const rawMsg = String(event?.message || 'Prisma query failed');
       const now = Date.now();
+      if (isConnectivityErrorMessage(rawMsg)) {
+        if (!globalForPrisma.lastOfflineNoticeAt || now - globalForPrisma.lastOfflineNoticeAt > 60000) {
+          globalForPrisma.lastOfflineNoticeAt = now;
+          console.log('ℹ️ [PRISMA-DB] PostgreSQL belum tersedia, aplikasi menggunakan fallback JSON lokal.');
+        }
+        return;
+      }
       if (!globalForPrisma.lastSanitizedPrismaWarnAt || now - globalForPrisma.lastSanitizedPrismaWarnAt > 15000) {
         globalForPrisma.lastSanitizedPrismaWarnAt = now;
-        const cleanMsg = sanitizeDiagnosticMessage(event?.message || 'Prisma query failed', [
+        const cleanMsg = sanitizeDiagnosticMessage(rawMsg, [
           process.env.DATABASE_URL,
           process.env.DIRECT_URL
         ]);
@@ -47,24 +81,77 @@ export function getPrisma(): PrismaClient {
 }
 
 /**
- * 🩺 Pengecekan ketersediaan database dengan cache singkat (15 detik)
- * Mencegah endpoint publik membanjiri pooler dengan puluhan query gagal saat DB offline.
+ * 🩺 Probe status koneksi database secara aman (tanpa membanjiri stderr saat offline)
  */
-export async function isDatabaseAvailableCached(ttlMs: number = 15000): Promise<boolean> {
-  if (!process.env.DATABASE_URL) return false;
+export async function probeDatabaseStatus(ttlMs: number = 30000): Promise<{
+  reachable: boolean;
+  errorCode: string | null;
+  errorSummary: string | null;
+}> {
+  const dbUrl = process.env.DATABASE_URL || '';
+  if (!dbUrl) {
+    return {
+      reachable: false,
+      errorCode: 'MISSING_DATABASE_URL',
+      errorSummary: 'DATABASE_URL environment variable is not defined.'
+    };
+  }
+
   const cached = globalForPrisma.dbAvailabilityCache;
   const now = Date.now();
-  if (cached && now - cached.checkedAt < ttlMs) {
-    return cached.reachable;
+  const effectiveTtl = cached && !cached.reachable ? Math.max(ttlMs, 60000) : ttlMs;
+  if (cached && now - cached.checkedAt < effectiveTtl) {
+    return {
+      reachable: cached.reachable,
+      errorCode: cached.errorCode,
+      errorSummary: cached.errorSummary
+    };
   }
+
+  globalForPrisma.isProbingDb = true;
   try {
     await getPrisma().$queryRawUnsafe('SELECT 1');
-    globalForPrisma.dbAvailabilityCache = { reachable: true, checkedAt: now };
-    return true;
-  } catch {
-    globalForPrisma.dbAvailabilityCache = { reachable: false, checkedAt: now };
-    return false;
+    globalForPrisma.dbAvailabilityCache = {
+      reachable: true,
+      checkedAt: now,
+      errorCode: null,
+      errorSummary: null
+    };
+    return { reachable: true, errorCode: null, errorSummary: null };
+  } catch (err: any) {
+    const errorCode =
+      typeof err?.code === 'string'
+        ? err.code
+        : typeof err?.errorCode === 'string'
+        ? err.errorCode
+        : 'DB_UNREACHABLE';
+    const errorSummary = sanitizeDiagnosticMessage(
+      String(err?.message || 'Database connection failed'),
+      [dbUrl, process.env.DIRECT_URL, process.env.SESSION_SECRET]
+    );
+    globalForPrisma.dbAvailabilityCache = {
+      reachable: false,
+      checkedAt: now,
+      errorCode,
+      errorSummary
+    };
+    if (!globalForPrisma.lastOfflineNoticeAt || now - globalForPrisma.lastOfflineNoticeAt > 60000) {
+      globalForPrisma.lastOfflineNoticeAt = now;
+      console.log('ℹ️ [PRISMA-DB] PostgreSQL belum tersedia, layanan berjalan dengan mode fallback JSON.');
+    }
+    return { reachable: false, errorCode, errorSummary };
+  } finally {
+    globalForPrisma.isProbingDb = false;
   }
+}
+
+/**
+ * 🩺 Pengecekan ketersediaan database dengan cache singkat
+ * Mencegah endpoint publik membanjiri pooler dengan puluhan query gagal saat DB offline.
+ */
+export async function isDatabaseAvailableCached(ttlMs: number = 30000): Promise<boolean> {
+  const status = await probeDatabaseStatus(ttlMs);
+  return status.reachable;
 }
 
 // ============================================================================
@@ -128,7 +215,21 @@ export async function getLatestBudget() {
  * Ada 'try-catch' biar kalau DB lagi down, Panjul tetep bisa nyapa warga pakai data aman (fallback).
  */
 export async function getAiContext() {
+  const emptyContext = {
+    profile: null,
+    services: [],
+    servicesCount: 0,
+    latestNews: [],
+    budget: null,
+    officials: [],
+    umkm: []
+  };
+
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      return emptyContext;
+    }
+
     const p = getPrisma();
     // Tarik data secara barengan (paralel) biar kilat!
     const [profile, services, latestNews, budget, officials, umkm] = await Promise.all([
@@ -167,18 +268,14 @@ export async function getAiContext() {
       officials: Array.isArray(officials) ? officials : [],
       umkm: Array.isArray(umkm) ? umkm : []
     };
-  } catch (error) {
+  } catch (error: any) {
     // Kalau Supabase lagi ngadat, kasih info kosong aja biar gak crash satu portal
-    console.error('⚠️ [AI-CONTEXT] Gagal ambil konteks AI dari Supabase, pakai data aman:', error);
-    return {
-      profile: null,
-      services: [],
-      servicesCount: 0,
-      latestNews: [],
-      budget: null,
-      officials: [],
-      umkm: []
-    };
+    const safeMsg = sanitizeDiagnosticMessage(error?.message || 'AI context fallback', [
+      process.env.DATABASE_URL,
+      process.env.DIRECT_URL
+    ]);
+    console.log('ℹ️ [AI-CONTEXT] Pakai konteks lokal aman:', safeMsg);
+    return emptyContext;
   }
 }
 
@@ -191,6 +288,13 @@ export async function getAiContext() {
  * Dipakai pas login buat ngecek apakah akunnya beneran ada.
  */
 export async function getUserByUsername(username: string) {
+  if (!(await isDatabaseAvailableCached())) {
+    const { getDb } = await import('./database');
+    const clean = username.trim().toLowerCase();
+    return getDb().users.find(
+      (u) => u.username.toLowerCase() === clean || u.email.toLowerCase() === clean
+    ) || null;
+  }
   return getPrisma().user.findUnique({
     where: { username },
   });
@@ -201,6 +305,17 @@ export async function getUserByUsername(username: string) {
  * Dipakai buat validasi session token yang dibawa browser.
  */
 export async function getUserById(id: string) {
+  if (!(await isDatabaseAvailableCached())) {
+    const { getDb } = await import('./database');
+    const u = getDb().users.find((user) => user.id === id);
+    if (!u) return null;
+    return {
+      ...u,
+      tokenVersion: 1,
+      mustChangePassword: false,
+      lastLogin: u.lastLogin ? new Date(u.lastLogin) : null
+    } as any;
+  }
   return getPrisma().user.findUnique({
     where: { id },
   });
@@ -212,12 +327,22 @@ export async function getUserById(id: string) {
  */
 export async function updateUserLastLogin(id: string) {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const { getDb, saveDb } = await import('./database');
+      const db = getDb();
+      const idx = (db.users || []).findIndex((u: any) => u.id === id);
+      if (idx >= 0) {
+        db.users[idx].lastLogin = new Date().toISOString();
+        saveDb(db);
+      }
+      return;
+    }
     await getPrisma().user.update({
       where: { id },
       data: { lastLogin: new Date() },
     });
-  } catch (err) {
-    console.error('⚠️ [LAST-LOGIN] Gagal update waktu login terakhir:', err);
+  } catch (err: any) {
+    console.warn('⚠️ [LAST-LOGIN] Gagal update waktu login terakhir:', sanitizeDiagnosticMessage(err?.message || String(err)));
   }
 }
 
@@ -241,6 +366,27 @@ export async function recordAuditLogDb(
   ipAddress = '127.0.0.1'
 ) {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const { getDb, saveDb } = await import('./database');
+      const db = getDb();
+      db.auditLogs = [
+        {
+          id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          userId,
+          userName,
+          userRole,
+          action,
+          module,
+          details,
+          ipAddress,
+          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19)
+        },
+        ...(db.auditLogs || [])
+      ].slice(0, 1000);
+      saveDb(db);
+      return;
+    }
+
     await getPrisma().auditLog.create({
       data: {
         userId,
@@ -252,8 +398,9 @@ export async function recordAuditLogDb(
         ipAddress,
       },
     });
-  } catch (err) {
-    console.error('⚠️ [AUDIT-LOG] Gagal masukin log audit ke Supabase:', err);
+  } catch (err: any) {
+    console.warn('⚠️ [AUDIT-LOG] Gagal masukin log audit ke Supabase:', sanitizeDiagnosticMessage(err?.message || String(err)));
   }
 }
+
 

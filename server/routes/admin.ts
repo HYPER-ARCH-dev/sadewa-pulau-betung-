@@ -2,13 +2,15 @@ import { Router, Request, Response as ExpressResponse } from 'express';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { getPrisma, recordAuditLogDb } from '../db/prisma-helpers';
-import { seedInitialData } from '../db/database';
+import { getPrisma, recordAuditLogDb, isDatabaseAvailableCached, getUserById } from '../db/prisma-helpers';
+import { getDb, saveDb, seedInitialData } from '../db/database';
 import { authenticateToken, requireRoles, AuthenticatedRequest, verifyPassword, hashPassword, generateSalt, createToken } from '../auth';
 import { assignServerLetterNumberAtomic } from '../services/letterNumbering';
 import { clearSupabaseStorageBucket } from './upload';
 import { SERVER_CONFIG } from '../config/constants';
 import { getStorageArchitectureSummary } from '../config/storageRegistry';
+import { getAdminArchitectureMap } from '../config/adminModuleRegistry';
+import { runDatabaseBackup } from '../scripts/db-backup';
 
 const router = Router();
 
@@ -25,6 +27,25 @@ router.use(authenticateToken);
 // 1. Dashboard Statistics
 router.get('/stats', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      return res.json({
+        success: true,
+        degraded: true,
+        data: {
+          totalRequests: (db.serviceRequests || []).length,
+          pendingRequests: (db.serviceRequests || []).filter((r: any) => ['diajukan', 'diverifikasi', 'diproses'].includes(r.status)).length,
+          completedRequests: (db.serviceRequests || []).filter((r: any) => r.status === 'selesai').length,
+          totalComplaints: (db.complaints || []).length,
+          activeComplaints: (db.complaints || []).filter((c: any) => !['selesai', 'ditolak'].includes(c.status)).length,
+          totalNews: (db.news || []).length,
+          totalProjects: (db.developmentProjects || []).length,
+          totalAuditLogs: (db.auditLogs || []).length,
+          totalResidents: (db.residents || []).length || db.villageProfile?.totalPopulation || 0
+        }
+      });
+    }
+
     const prisma = getPrisma();
     
     // Tarik statistik secara paralel untuk performa maksimal
@@ -61,7 +82,7 @@ router.get('/stats', requireRoles('super_admin', 'admin_desa', 'operator'), asyn
         totalNews,
         totalProjects,
         totalAuditLogs,
-        totalResidents // Tambahan data penduduk
+        totalResidents
       }
     });
   } catch (error: any) {
@@ -127,8 +148,12 @@ export async function recalculateVillageProfileStats(prisma: any) {
   }
 }
 
-router.get('/residents', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.get('/residents', requireRoles('super_admin', 'admin_desa', 'operator', 'admin_posyandu'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      return res.json({ success: true, degraded: true, data: db.residents || [] });
+    }
     const prisma = getPrisma();
     const residents = await prisma.resident.findMany({
       include: {
@@ -510,6 +535,23 @@ router.put('/residents/:id', requireRoles('super_admin', 'admin_desa'), async (r
 // 2a. User Management (CRUD for Super Admin and Admin Desa)
 router.get('/users', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      const safeUsers = (db.users || []).map((u: any) => ({
+        id: u.id,
+        name: u.name,
+        username: u.username,
+        email: u.email,
+        role: u.role,
+        roleTitle: u.roleTitle,
+        isActive: u.isActive,
+        officialId: u.officialId || null,
+        permissions: u.permissions || [],
+        lastLogin: u.lastLogin || null,
+        createdAt: u.createdAt
+      }));
+      return res.json({ success: true, degraded: true, data: safeUsers });
+    }
     const prisma = getPrisma();
     
     // Admin Desa can see users, but maybe we should limit or just let them see all
@@ -797,6 +839,10 @@ router.post('/residents/sync-profile', requireRoles('super_admin', 'admin_desa',
 // 2b. Bansos Management
 router.get('/bansos', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      return res.json({ success: true, degraded: true, data: db.kpm || [] });
+    }
     const data = await getPrisma().bansosRecipient.findMany({
       include: { resident: true },
       orderBy: { createdAt: 'desc' }
@@ -810,6 +856,25 @@ router.get('/bansos', requireRoles('super_admin', 'admin_desa', 'operator'), asy
 router.post('/bansos', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { residentId, programName, fiscalYear, stageOrMonth, nominalAmount, status, notes } = req.body;
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.kpm = db.kpm || [];
+      const created = {
+        id: generateServerId('bansos'),
+        residentId,
+        programName: programName || 'BLT-DD',
+        fiscalYear: Number(fiscalYear) || 2026,
+        stageOrMonth: stageOrMonth || 'Tahap 1',
+        nominalAmount: Number(nominalAmount) || 0,
+        status: status || 'TERDAFTAR',
+        notes: notes || '',
+        createdAt: new Date().toISOString()
+      };
+      db.kpm.unshift(created);
+      saveDb(db);
+      return res.status(201).json({ success: true, degraded: true, data: created });
+    }
+
     const bansos = await getPrisma().bansosRecipient.create({
       data: { residentId, programName, fiscalYear, stageOrMonth, nominalAmount, status, notes },
       include: { resident: true }
@@ -834,6 +899,10 @@ router.post('/bansos', requireRoles('super_admin', 'admin_desa', 'operator'), as
 // 2c. Posyandu / Toddler Management
 router.get('/toddlers', requireRoles('super_admin', 'admin_desa', 'operator', 'admin_posyandu'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      return res.json({ success: true, degraded: true, data: db.toddlers || [] });
+    }
     const data = await getPrisma().toddlerRecord.findMany({
       include: {
         measurements: {
@@ -851,7 +920,34 @@ router.get('/toddlers', requireRoles('super_admin', 'admin_desa', 'operator', 'a
 
 router.post('/toddlers', requireRoles('super_admin', 'admin_desa', 'operator', 'admin_posyandu'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
-    const { name, nik, gender, birthDate, parentName, parentPhone, dusunName, rtRw, address, kmsCardNumber, birthWeightKg, birthHeightCm } = req.body;
+    const { name, nik, gender, birthDate, parentName, parentNik, parentPhone, dusunName, rtRw, address, coordinates, kmsCardNumber, birthWeightKg, birthHeightCm, isInterventionTarget } = req.body;
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.toddlers = db.toddlers || [];
+      const newRec = {
+        id: generateServerId('toddler'),
+        name,
+        nik: nik || `TEMP-${Date.now()}`,
+        gender: gender || 'L',
+        birthDate,
+        birthWeightKg: birthWeightKg ? Number(birthWeightKg) : 3.0,
+        birthHeightCm: birthHeightCm ? Number(birthHeightCm) : 48.0,
+        parentName: parentName || 'Orang Tua Balita',
+        parentNik: parentNik || null,
+        parentPhone: parentPhone || '-',
+        dusunName: dusunName || 'Dusun I',
+        rtRw: rtRw || 'RT 01/RW 01',
+        address: address || 'Desa Pulau Betung',
+        coordinates: Array.isArray(coordinates) ? coordinates : [-1.5562, 103.4475],
+        kmsCardNumber: kmsCardNumber || `KMS-${Date.now()}`,
+        isInterventionTarget: Boolean(isInterventionTarget),
+        measurements: Array.isArray(req.body.measurements) ? req.body.measurements : []
+      };
+      db.toddlers.unshift(newRec);
+      saveDb(db);
+      return res.status(201).json({ success: true, degraded: true, data: newRec });
+    }
+
     const toddler = await getPrisma().toddlerRecord.create({
       data: { 
         name, 
@@ -860,13 +956,15 @@ router.post('/toddlers', requireRoles('super_admin', 'admin_desa', 'operator', '
         birthDate: new Date(birthDate), 
         birthWeightKg: birthWeightKg ? Number(birthWeightKg) : 3.0,
         birthHeightCm: birthHeightCm ? Number(birthHeightCm) : 48.0,
-        parentName: parentName || 'Orang Tua Balita', 
+        parentName: parentName || 'Orang Tua Balita',
+        parentNik: parentNik || null,
         parentPhone: parentPhone || '-', 
         dusunName: dusunName || 'Dusun I', 
         rtRw: rtRw || 'RT 01/RW 01', 
         address: address || 'Desa Pulau Betung', 
-        coordinates: [1.815, 103.582], 
-        kmsCardNumber: kmsCardNumber || `KMS-${Date.now()}-${Math.floor(Math.random() * 1000)}` 
+        coordinates: Array.isArray(coordinates) ? coordinates : [-1.5562, 103.4475], 
+        kmsCardNumber: kmsCardNumber || `KMS-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        isInterventionTarget: Boolean(isInterventionTarget)
       }
     });
 
@@ -886,17 +984,142 @@ router.post('/toddlers', requireRoles('super_admin', 'admin_desa', 'operator', '
   }
 });
 
-router.post('/toddlers/measurements', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.put('/toddlers/:id', requireRoles('super_admin', 'admin_desa', 'operator', 'admin_posyandu'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
-    const { toddlerId, measurementDate, weight, height, headCircumference, notes } = req.body;
+    const { id } = req.params;
+    const { name, nik, gender, birthDate, parentName, parentNik, parentPhone, dusunName, rtRw, address, coordinates, kmsCardNumber, birthWeightKg, birthHeightCm, isInterventionTarget } = req.body;
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.toddlers = db.toddlers || [];
+      const idx = db.toddlers.findIndex((t: any) => t.id === id);
+      if (idx === -1) return res.status(404).json({ success: false, error: 'Data balita tidak ditemukan.' });
+      db.toddlers[idx] = { ...db.toddlers[idx], ...req.body, id };
+      saveDb(db);
+      return res.json({ success: true, degraded: true, data: db.toddlers[idx] });
+    }
+
+    const updated = await getPrisma().toddlerRecord.update({
+      where: { id },
+      data: {
+        name: name?.trim(),
+        nik: nik?.trim(),
+        gender,
+        birthDate: birthDate ? new Date(birthDate) : undefined,
+        birthWeightKg: birthWeightKg !== undefined ? Number(birthWeightKg) : undefined,
+        birthHeightCm: birthHeightCm !== undefined ? Number(birthHeightCm) : undefined,
+        parentName,
+        parentNik,
+        parentPhone,
+        dusunName,
+        rtRw,
+        address,
+        coordinates,
+        kmsCardNumber,
+        isInterventionTarget: isInterventionTarget !== undefined ? Boolean(isInterventionTarget) : undefined
+      },
+      include: { measurements: { orderBy: { measurementDate: 'desc' } } }
+    });
+
+    await recordAuditLogDb(
+      req.user!.userId,
+      req.user!.name,
+      req.user!.role,
+      'Perbarui Data Balita',
+      'e-Posyandu',
+      `Memperbarui data balita: ${updated.name}`,
+      req.ip || '127.0.0.1'
+    );
+
+    return res.json({ success: true, data: updated });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: error.message || 'Gagal memperbarui data balita.' });
+  }
+});
+
+router.delete('/toddlers/:id', requireRoles('super_admin', 'admin_desa', 'operator', 'admin_posyandu'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+  try {
+    const { id } = req.params;
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.toddlers = (db.toddlers || []).filter((t: any) => t.id !== id);
+      saveDb(db);
+      return res.json({ success: true, degraded: true, message: 'Data balita berhasil dihapus.' });
+    }
+
+    const removed = await getPrisma().toddlerRecord.delete({ where: { id } });
+    await recordAuditLogDb(
+      req.user!.userId,
+      req.user!.name,
+      req.user!.role,
+      'Hapus Data Balita',
+      'e-Posyandu',
+      `Menghapus data balita: ${removed.name}`,
+      req.ip || '127.0.0.1'
+    );
+
+    return res.json({ success: true, message: 'Data balita berhasil dihapus.' });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: 'Gagal menghapus data balita.' });
+  }
+});
+
+router.post('/toddlers/measurements', requireRoles('super_admin', 'admin_desa', 'operator', 'admin_posyandu'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+  try {
+    const { toddlerId, measurementDate, weight, weightKg, height, heightCm, headCircumference, headCircumferenceCm, notes, ageInMonths, vitA, deworming, immunizationStatus, zScoreHeightForAge, zScoreWeightForAge, zScoreWeightForHeight, stuntingCategory, weightCategory, overallStatus } = req.body;
+    const finalWeight = Number(weightKg ?? weight);
+    const finalHeight = Number(heightCm ?? height);
+    const finalHead = Number(headCircumferenceCm ?? headCircumference ?? 0);
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.toddlers = db.toddlers || [];
+      const idx = db.toddlers.findIndex((t: any) => t.id === toddlerId);
+      const newM = {
+        id: generateServerId('meas'),
+        toddlerId,
+        measurementDate: measurementDate || new Date().toISOString().split('T')[0],
+        ageInMonths: Number(ageInMonths) || 0,
+        weightKg: finalWeight,
+        heightCm: finalHeight,
+        headCircumferenceCm: finalHead,
+        vitA: Boolean(vitA),
+        deworming: Boolean(deworming),
+        immunizationStatus: immunizationStatus || 'Lengkap',
+        zScoreHeightForAge: Number(zScoreHeightForAge) || 0,
+        zScoreWeightForAge: Number(zScoreWeightForAge) || 0,
+        zScoreWeightForHeight: Number(zScoreWeightForHeight) || 0,
+        stuntingCategory: stuntingCategory || 'Normal',
+        weightCategory: weightCategory || 'Normal',
+        overallStatus: overallStatus || 'Normal (Gizi Baik)',
+        cadreNotes: notes || ''
+      };
+      if (idx !== -1) {
+        db.toddlers[idx].measurements = [...(db.toddlers[idx].measurements || []), newM];
+        saveDb(db);
+      }
+      return res.status(201).json({ success: true, degraded: true, data: newM });
+    }
+
     const measurement = await getPrisma().toddlerMeasurement.create({
       data: { 
         toddlerId, 
-        measurementDate: new Date(measurementDate), 
-        weight: Number(weight), 
-        height: Number(height), 
-        headCircumference: headCircumference ? Number(headCircumference) : null,
-        notes 
+        measurementDate: new Date(measurementDate),
+        ageInMonths: Number(ageInMonths) || 0,
+        weightKg: finalWeight, 
+        heightCm: finalHeight, 
+        headCircumferenceCm: finalHead,
+        vitA: Boolean(vitA),
+        deworming: Boolean(deworming),
+        immunizationStatus: immunizationStatus || 'Lengkap',
+        zScoreHeightForAge: Number(zScoreHeightForAge) || 0,
+        zScoreWeightForAge: Number(zScoreWeightForAge) || 0,
+        zScoreWeightForHeight: Number(zScoreWeightForHeight) || 0,
+        stuntingCategory: stuntingCategory || 'Normal',
+        weightCategory: weightCategory || 'Normal',
+        overallStatus: overallStatus || 'Normal (Gizi Baik)',
+        cadreNotes: notes || null,
+        measuredBy: req.user?.name || 'Kader Posyandu'
       }
     });
 
@@ -908,6 +1131,10 @@ router.post('/toddlers/measurements', requireRoles('super_admin', 'admin_desa', 
 
 router.get('/requests', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      return res.json({ success: true, degraded: true, data: db.serviceRequests || [] });
+    }
     const data = await getPrisma().serviceRequest.findMany({
       orderBy: { createdAt: 'desc' }
     });
@@ -1221,6 +1448,10 @@ router.post('/requests/bulk-delete', requireRoles('super_admin', 'admin_desa', '
 // Get Deleted Service Requests Log
 router.get('/requests/deleted', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      return res.json({ success: true, degraded: true, data: db.deletedServiceRequests || [] });
+    }
     const list = await getPrisma().deletedServiceRequest.findMany({
       orderBy: { deletedAt: 'desc' }
     });
@@ -1233,10 +1464,32 @@ router.get('/requests/deleted', requireRoles('super_admin', 'admin_desa', 'opera
 // Restore Deleted Service Request
 router.post('/requests/deleted/:id/restore', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   const { id } = req.params;
+  const searchId = (id || '').trim();
+
+  if (!(await isDatabaseAvailableCached())) {
+    const db = getDb();
+    db.deletedServiceRequests = db.deletedServiceRequests || [];
+    const idx = db.deletedServiceRequests.findIndex((d: any) => d.id === searchId || d.trackingCode === searchId);
+    if (idx === -1) return res.status(404).json({ success: false, error: 'Data log surat terhapus tidak ditemukan.' });
+    const delLog = db.deletedServiceRequests[idx];
+    const snapshot = delLog.fullRequestSnapshot || delLog;
+    db.serviceRequests = db.serviceRequests || [];
+    if (!db.serviceRequests.some((r: any) => r.id === snapshot.id || r.trackingCode === snapshot.trackingCode)) {
+      db.serviceRequests.unshift(snapshot);
+    }
+    db.deletedServiceRequests.splice(idx, 1);
+    saveDb(db);
+    return res.json({
+      success: true,
+      degraded: true,
+      message: `Permohonan surat ${snapshot.trackingCode || searchId} berhasil dipulihkan.`,
+      data: snapshot
+    });
+  }
+
   const prisma = getPrisma();
   
   try {
-    const searchId = (id || '').trim();
     const restored = await prisma.$transaction(async (tx: any) => {
       const delLog = await tx.deletedServiceRequest.findFirst({
         where: {
@@ -1301,6 +1554,17 @@ router.post('/requests/deleted/:id/restore', requireRoles('super_admin', 'admin_
 router.delete('/requests/deleted/:id', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      const before = (db.deletedServiceRequests || []).length;
+      db.deletedServiceRequests = (db.deletedServiceRequests || []).filter((d: any) => d.id !== id);
+      if (db.deletedServiceRequests.length === before) {
+        return res.status(404).json({ success: false, error: 'Catatan log tidak ditemukan.' });
+      }
+      saveDb(db);
+      return res.json({ success: true, degraded: true, message: 'Catatan log surat terhapus berhasil dibersihkan.' });
+    }
+
     const wiped = await getPrisma().deletedServiceRequest.delete({ where: { id } });
 
     await recordAuditLogDb(
@@ -1322,6 +1586,18 @@ router.delete('/requests/deleted/:id', requireRoles('super_admin', 'admin_desa')
 // Clear All Deleted Logs (Super Admin only for reset testing)
 router.post('/requests/deleted/clear-all', requireRoles('super_admin'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      const count = (db.deletedServiceRequests || []).length;
+      db.deletedServiceRequests = [];
+      saveDb(db);
+      return res.json({
+        success: true,
+        degraded: true,
+        message: `Seluruh catatan log sampah (${count} berkas) berhasil dikosongkan.`
+      });
+    }
+
     const prisma = getPrisma();
     const { count } = await prisma.deletedServiceRequest.deleteMany({});
 
@@ -1347,6 +1623,10 @@ router.post('/requests/deleted/clear-all', requireRoles('super_admin'), async (r
 // 3. Complaints Management (Operator, Admin Desa, Super Admin)
 router.get('/complaints', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      return res.json({ success: true, degraded: true, data: db.complaints || [] });
+    }
     const data = await getPrisma().complaint.findMany({
       orderBy: { createdAt: 'desc' }
     });
@@ -1364,6 +1644,23 @@ router.put('/complaints/:id/respond', requireRoles('super_admin', 'admin_desa', 
     const validStatuses = ['diterima', 'diverifikasi', 'diproses', 'selesai', 'ditolak'];
     if (status && !validStatuses.includes(status)) {
       return res.status(400).json({ success: false, error: 'Status aduan tidak valid.' });
+    }
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      const idx = (db.complaints || []).findIndex((c: any) => c.id === id);
+      if (idx === -1) return res.status(404).json({ success: false, error: 'Pengaduan tidak ditemukan.' });
+      db.complaints[idx] = {
+        ...db.complaints[idx],
+        adminResponse: response,
+        status: status || db.complaints[idx].status,
+        respondedBy: req.user?.name || 'Pemerintah Desa',
+        fotoBuktiPenyelesaian,
+        catatanTindakLanjut,
+        updatedAt: new Date().toISOString()
+      };
+      saveDb(db);
+      return res.json({ success: true, degraded: true, data: db.complaints[idx] });
     }
 
     const prisma = getPrisma();
@@ -1398,9 +1695,13 @@ router.put('/complaints/:id/respond', requireRoles('super_admin', 'admin_desa', 
   }
 });
 
-// 4. News CRUD (Editor, Admin Desa, Super Admin)
-router.get('/news', requireRoles('super_admin', 'admin_desa', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+// 4. News CRUD (Editor, Operator, Admin Desa, Super Admin)
+router.get('/news', requireRoles('super_admin', 'admin_desa', 'operator', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      return res.json({ success: true, degraded: true, data: db.news || [] });
+    }
     const data = await getPrisma().newsItem.findMany({
       orderBy: { publishedAt: 'desc' }
     });
@@ -1423,6 +1724,28 @@ router.post('/news', requireRoles('super_admin', 'admin_desa', 'editor'), async 
       .replace(/\s+/g, '-') + '-' + Date.now().toString().slice(-4);
 
     const finalImg = (coverImage || imageUrl || 'https://images.unsplash.com/photo-1577495508048-b635879837f1?w=800&auto=format&fit=crop&q=80').trim();
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.news = db.news || [];
+      const created = {
+        id: generateServerId('news'),
+        title: title.trim(),
+        slug,
+        summary: summary ? summary.trim() : title.slice(0, 120),
+        content: content.trim(),
+        category: category || 'pemerintahan',
+        author: (author || req.user?.name || 'Admin Desa').trim(),
+        coverImage: finalImg,
+        imageUrl: finalImg,
+        isPublished: typeof isPublished === 'boolean' ? isPublished : true,
+        publishedAt: new Date().toISOString(),
+        views: 0
+      };
+      db.news.unshift(created);
+      saveDb(db);
+      return res.status(201).json({ success: true, degraded: true, message: 'Berita berhasil dipublikasikan.', data: created });
+    }
 
     const newArticle = await getPrisma().newsItem.create({
       data: {
@@ -1458,9 +1781,23 @@ router.put('/news/:id', requireRoles('super_admin', 'admin_desa', 'editor'), asy
   try {
     const { id } = req.params;
     const { title, summary, content, category, imageUrl, coverImage, author, isPublished } = req.body;
-    const prisma = getPrisma();
-
     const finalImg = (coverImage || imageUrl)?.trim();
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      const idx = (db.news || []).findIndex((n: any) => n.id === id);
+      if (idx === -1) return res.status(404).json({ success: false, error: 'Berita tidak ditemukan.' });
+      db.news[idx] = {
+        ...db.news[idx],
+        ...req.body,
+        id,
+        ...(finalImg ? { coverImage: finalImg, imageUrl: finalImg } : {})
+      };
+      saveDb(db);
+      return res.json({ success: true, degraded: true, message: 'Berita berhasil diperbarui.', data: db.news[idx] });
+    }
+
+    const prisma = getPrisma();
 
     const article = await prisma.newsItem.update({
       where: { id },
@@ -1494,6 +1831,13 @@ router.put('/news/:id', requireRoles('super_admin', 'admin_desa', 'editor'), asy
 router.delete('/news/:id', requireRoles('super_admin', 'admin_desa', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.news = (db.news || []).filter((n: any) => n.id !== id);
+      saveDb(db);
+      return res.json({ success: true, degraded: true, message: 'Berita berhasil dihapus.' });
+    }
+
     const removed = await getPrisma().newsItem.delete({ where: { id } });
 
     await recordAuditLogDb(
@@ -1518,6 +1862,23 @@ router.post('/announcements', requireRoles('super_admin', 'admin_desa', 'editor'
     const { title, content, priority, validUntil } = req.body;
     if (!title || !content) {
       return res.status(400).json({ success: false, error: 'Judul dan isi pengumuman wajib diisi.' });
+    }
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.announcements = db.announcements || [];
+      const created = {
+        id: generateServerId('ann'),
+        title: title.trim(),
+        content: content.trim(),
+        priority: priority || 'normal',
+        validUntil: validUntil || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+        publishedAt: new Date().toISOString(),
+        isActive: true
+      };
+      db.announcements.unshift(created);
+      saveDb(db);
+      return res.status(201).json({ success: true, degraded: true, message: 'Pengumuman berhasil diterbitkan.', data: created });
     }
 
     const newAnn = await getPrisma().announcement.create({
@@ -1551,6 +1912,15 @@ router.put('/announcements/:id', requireRoles('super_admin', 'admin_desa', 'edit
     const { id } = req.params;
     const { title, content, priority, validUntil, isActive } = req.body;
 
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      const idx = (db.announcements || []).findIndex((a: any) => a.id === id);
+      if (idx === -1) return res.status(404).json({ success: false, error: 'Pengumuman tidak ditemukan.' });
+      db.announcements[idx] = { ...db.announcements[idx], ...req.body, id };
+      saveDb(db);
+      return res.json({ success: true, degraded: true, message: 'Pengumuman berhasil diperbarui.', data: db.announcements[idx] });
+    }
+
     const ann = await getPrisma().announcement.update({
       where: { id },
       data: {
@@ -1581,6 +1951,13 @@ router.put('/announcements/:id', requireRoles('super_admin', 'admin_desa', 'edit
 router.delete('/announcements/:id', requireRoles('super_admin', 'admin_desa', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.announcements = (db.announcements || []).filter((a: any) => a.id !== id);
+      saveDb(db);
+      return res.json({ success: true, degraded: true, message: 'Pengumuman berhasil dihapus.' });
+    }
+
     const removed = await getPrisma().announcement.delete({ where: { id } });
 
     await recordAuditLogDb(
@@ -1602,9 +1979,28 @@ router.delete('/announcements/:id', requireRoles('super_admin', 'admin_desa', 'e
 // 6. Agendas CRUD (Editor, Admin Desa, Super Admin)
 router.post('/agendas', requireRoles('super_admin', 'admin_desa', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
-    const { title, date, time, location, organizer, description } = req.body;
+    const { title, date, time, location, organizer, description, category } = req.body;
     if (!title || !date || !location) {
       return res.status(400).json({ success: false, error: 'Judul, tanggal, dan lokasi agenda wajib diisi.' });
+    }
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.agendas = db.agendas || [];
+      const created = {
+        id: generateServerId('agenda'),
+        title: title.trim(),
+        date,
+        time: time || '09:00 WIB',
+        location: location.trim(),
+        organizer: organizer || 'Pemerintah Desa',
+        description: description || '',
+        category: category || undefined,
+        status: 'akan_datang'
+      };
+      db.agendas.unshift(created);
+      saveDb(db);
+      return res.status(201).json({ success: true, degraded: true, message: 'Agenda berhasil ditambahkan.', data: created });
     }
 
     const newAgenda = await getPrisma().agendaItem.create({
@@ -1635,9 +2031,59 @@ router.post('/agendas', requireRoles('super_admin', 'admin_desa', 'editor'), asy
   }
 });
 
-router.delete('/agendas/:id', requireRoles('super_admin', 'admin_desa', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.put('/agendas/:id', requireRoles('super_admin', 'admin_desa', 'operator', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
+    const { title, date, time, location, organizer, description, category, status } = req.body;
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      const idx = (db.agendas || []).findIndex((a: any) => a.id === id);
+      if (idx === -1) return res.status(404).json({ success: false, error: 'Agenda tidak ditemukan.' });
+      db.agendas[idx] = { ...db.agendas[idx], ...req.body, id };
+      saveDb(db);
+      return res.json({ success: true, degraded: true, message: 'Agenda berhasil diperbarui.', data: db.agendas[idx] });
+    }
+
+    const updatedAgenda = await getPrisma().agendaItem.update({
+      where: { id },
+      data: {
+        title: title?.trim(),
+        date: date ? new Date(date) : undefined,
+        time: time || undefined,
+        location: location?.trim(),
+        organizer: organizer || undefined,
+        description: description !== undefined ? description : undefined,
+        category: category !== undefined ? category : undefined,
+        status: status || undefined
+      }
+    });
+
+    await recordAuditLogDb(
+      req.user!.userId,
+      req.user!.name,
+      req.user!.role,
+      'Perbarui Agenda',
+      'Kalender Kegiatan',
+      `Memperbarui agenda: "${updatedAgenda.title}"`,
+      req.ip || '127.0.0.1'
+    );
+
+    return res.json({ success: true, message: 'Agenda berhasil diperbarui.', data: updatedAgenda });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: 'Gagal memperbarui agenda.' });
+  }
+});
+
+router.delete('/agendas/:id', requireRoles('super_admin', 'admin_desa', 'operator', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+  try {
+    const { id } = req.params;
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.agendas = (db.agendas || []).filter((a: any) => a.id !== id);
+      saveDb(db);
+      return res.json({ success: true, degraded: true, message: 'Agenda berhasil dihapus.' });
+    }
     const removed = await getPrisma().agendaItem.delete({ where: { id } });
 
     await recordAuditLogDb(
@@ -1659,20 +2105,44 @@ router.delete('/agendas/:id', requireRoles('super_admin', 'admin_desa', 'editor'
 // 7. Development Projects CRUD (Admin Desa, Super Admin)
 router.post('/projects', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
-    const { title, location, year, budget, source, contractor, progress, status, description, imageUrl } = req.body;
-    if (!title || !location || !budget) {
+    const { title, location, year, fiscalYear, budget, source, fundingSource, contractor, progress, progressPercent, status, description, imageUrl } = req.body;
+    if (!title || !location || budget === undefined) {
       return res.status(400).json({ success: false, error: 'Nama proyek, lokasi, dan anggaran wajib diisi.' });
+    }
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.developmentProjects = db.developmentProjects || [];
+      const created = {
+        id: generateServerId('proj'),
+        title: title.trim(),
+        location: location.trim(),
+        fiscalYear: Number(year || fiscalYear) || 2026,
+        budget: Number(budget) || 0,
+        fundingSource: fundingSource || source || 'Dana Desa (DDS)',
+        contractor: contractor || 'TPK Desa Pulau Betung',
+        progressPercent: Math.min(100, Math.max(0, Number(progress ?? progressPercent) || 0)),
+        status: status || 'sedang_berjalan',
+        description: description || '',
+        beforeImage: imageUrl || 'https://images.unsplash.com/photo-1541888946425-d0fbb186156f?w=800&auto=format&fit=crop&q=80',
+        inProgressImage: imageUrl || 'https://images.unsplash.com/photo-1541888946425-d0fbb186156f?w=800&auto=format&fit=crop&q=80',
+        startDate: new Date().toISOString(),
+        targetEndDate: new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString()
+      };
+      db.developmentProjects.unshift(created);
+      saveDb(db);
+      return res.status(201).json({ success: true, degraded: true, message: 'Proyek pembangunan berhasil ditambahkan.', data: created });
     }
 
     const newProj = await getPrisma().developmentProject.create({
       data: {
         title: title.trim(),
         location: location.trim(),
-        fiscalYear: Number(year) || 2026,
+        fiscalYear: Number(year || fiscalYear) || 2026,
         budget: Number(budget) || 0,
-        fundingSource: source || 'Dana Desa (DDS)',
+        fundingSource: fundingSource || source || 'Dana Desa (DDS)',
         contractor: contractor || 'TPK Desa Pulau Betung',
-        progressPercent: Math.min(100, Math.max(0, Number(progress) || 0)),
+        progressPercent: Math.min(100, Math.max(0, Number(progress ?? progressPercent) || 0)),
         status: status || 'sedang_berjalan',
         description: description || '',
         beforeImage: imageUrl || 'https://images.unsplash.com/photo-1541888946425-d0fbb186156f?w=800&auto=format&fit=crop&q=80',
@@ -1702,10 +2172,22 @@ router.put('/projects/:id', requireRoles('super_admin', 'admin_desa'), async (re
   try {
     const { id } = req.params;
     const { progress, progressPercent } = req.body;
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      const idx = (db.developmentProjects || []).findIndex((p: any) => p.id === id);
+      if (idx === -1) return res.status(404).json({ success: false, error: 'Proyek pembangunan tidak ditemukan.' });
+      const nextProgress = progress !== undefined || progressPercent !== undefined
+        ? Math.min(100, Math.max(0, Number(progress ?? progressPercent)))
+        : db.developmentProjects[idx].progressPercent;
+      db.developmentProjects[idx] = { ...db.developmentProjects[idx], ...req.body, progressPercent: nextProgress, id };
+      saveDb(db);
+      return res.json({ success: true, degraded: true, message: 'Data proyek berhasil diperbarui.', data: db.developmentProjects[idx] });
+    }
     
     const updateData = { ...req.body };
     if (progress !== undefined || progressPercent !== undefined) {
-      updateData.progressPercent = Math.min(100, Math.max(0, Number(progress || progressPercent)));
+      updateData.progressPercent = Math.min(100, Math.max(0, Number(progress ?? progressPercent)));
     }
     
     // Clean up non-schema fields
@@ -1738,6 +2220,20 @@ router.put('/projects/:id', requireRoles('super_admin', 'admin_desa'), async (re
 router.put('/umkm/:id/verify', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      const idx = (db.umkm || []).findIndex((u: any) => u.id === id);
+      if (idx === -1) return res.status(404).json({ success: false, error: 'UMKM tidak ditemukan.' });
+      db.umkm[idx] = { ...db.umkm[idx], isVerified: !db.umkm[idx].isVerified };
+      saveDb(db);
+      return res.json({
+        success: true,
+        degraded: true,
+        message: `Status verifikasi ${db.umkm[idx].name} berhasil diperbarui.`,
+        data: db.umkm[idx]
+      });
+    }
+
     const prisma = getPrisma();
     
     const existing = await prisma.umkmItem.findUnique({ where: { id } });
@@ -1773,6 +2269,26 @@ router.post('/umkm', requireRoles('super_admin', 'admin_desa'), async (req: Auth
     const { name, ownerName, category, description, products, imageUrl, location, whatsappContact } = req.body;
     if (!name || !ownerName) {
       return res.status(400).json({ success: false, error: 'Nama usaha dan nama pemilik wajib diisi.' });
+    }
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.umkm = db.umkm || [];
+      const created = {
+        id: generateServerId('umkm'),
+        name: name.trim(),
+        ownerName: ownerName.trim(),
+        category: category || 'kuliner',
+        description: description || '',
+        products: Array.isArray(products) ? products : (products ? [products] : []),
+        imageUrl: imageUrl || 'https://images.unsplash.com/photo-1556910103-1c02745aae4d?w=600&auto=format&fit=crop&q=80',
+        location: location || 'Desa Pulau Betung',
+        whatsappContact: whatsappContact || '',
+        isVerified: true
+      };
+      db.umkm.unshift(created);
+      saveDb(db);
+      return res.status(201).json({ success: true, degraded: true, message: 'UMKM berhasil didaftarkan.', data: created });
     }
 
     const prisma = getPrisma();
@@ -1826,9 +2342,62 @@ router.post('/umkm', requireRoles('super_admin', 'admin_desa'), async (req: Auth
   }
 });
 
-router.delete('/umkm/:id', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.put('/umkm/:id', requireRoles('super_admin', 'admin_desa', 'operator', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
+    const { name, ownerName, category, description, products, imageUrl, location, whatsappContact, phone, priceRange, isVerified } = req.body;
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      const idx = (db.umkm || []).findIndex((u: any) => u.id === id);
+      if (idx === -1) return res.status(404).json({ success: false, error: 'UMKM tidak ditemukan.' });
+      db.umkm[idx] = { ...db.umkm[idx], ...req.body, id };
+      saveDb(db);
+      return res.json({ success: true, degraded: true, data: db.umkm[idx] });
+    }
+
+    const updated = await getPrisma().umkmItem.update({
+      where: { id },
+      data: {
+        name: name?.trim(),
+        ownerName: ownerName?.trim(),
+        category,
+        description,
+        products: Array.isArray(products) ? products : undefined,
+        imageUrl,
+        location,
+        whatsappContact,
+        phone,
+        priceRange,
+        isVerified: typeof isVerified === 'boolean' ? isVerified : undefined
+      }
+    });
+
+    await recordAuditLogDb(
+      req.user!.userId,
+      req.user!.name,
+      req.user!.role,
+      'Update UMKM',
+      'Katalog UMKM',
+      `Memperbarui data UMKM: "${updated.name}"`,
+      req.ip || '127.0.0.1'
+    );
+
+    return res.json({ success: true, data: updated });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: 'Gagal memperbarui UMKM.' });
+  }
+});
+
+router.delete('/umkm/:id', requireRoles('super_admin', 'admin_desa', 'operator', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+  try {
+    const { id } = req.params;
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.umkm = (db.umkm || []).filter((u: any) => u.id !== id);
+      saveDb(db);
+      return res.json({ success: true, degraded: true, message: 'UMKM berhasil dihapus.' });
+    }
     const removed = await getPrisma().umkmItem.delete({ where: { id } });
 
     await recordAuditLogDb(
@@ -1851,6 +2420,12 @@ router.delete('/umkm/:id', requireRoles('super_admin', 'admin_desa'), async (req
 router.delete('/projects/:id', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.developmentProjects = (db.developmentProjects || []).filter((p: any) => p.id !== id);
+      saveDb(db);
+      return res.json({ success: true, degraded: true, message: 'Proyek pembangunan berhasil dihapus.' });
+    }
     const removed = await getPrisma().developmentProject.delete({ where: { id } });
 
     await recordAuditLogDb(
@@ -1869,12 +2444,259 @@ router.delete('/projects/:id', requireRoles('super_admin', 'admin_desa', 'operat
   }
 });
 
+// 7c. Village Potentials CRUD (Admin Desa, Super Admin)
+router.post('/potentials', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+  try {
+    const { name, category, description, highlightStat, imageUrl, keyCommodities, keyOpportunities } = req.body;
+    if (!name) {
+      return res.status(400).json({ success: false, error: 'Nama potensi desa wajib diisi.' });
+    }
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      const created = {
+        id: generateServerId('pot'),
+        name: name.trim(),
+        category: category || 'pertanian',
+        description: description || '',
+        highlightStat: highlightStat || '-',
+        imageUrl: imageUrl || '',
+        keyCommodities: Array.isArray(keyCommodities) ? keyCommodities : [],
+        keyOpportunities: Array.isArray(keyOpportunities) ? keyOpportunities : []
+      };
+      db.potentials = [created, ...(db.potentials || [])];
+      saveDb(db);
+      return res.status(201).json({ success: true, degraded: true, data: created });
+    }
+
+    const created = await getPrisma().villagePotential.create({
+      data: {
+        name: name.trim(),
+        category: category || 'pertanian',
+        description: description || '',
+        highlightStat: highlightStat || '-',
+        imageUrl: imageUrl || '',
+        keyCommodities: Array.isArray(keyCommodities) ? keyCommodities : [],
+        keyOpportunities: Array.isArray(keyOpportunities) ? keyOpportunities : []
+      }
+    });
+
+    await recordAuditLogDb(
+      req.user!.userId,
+      req.user!.name,
+      req.user!.role,
+      'Tambah Potensi Desa',
+      'Potensi Desa',
+      `Menambahkan potensi desa: "${created.name}" (${created.category})`,
+      req.ip || '127.0.0.1'
+    );
+
+    return res.status(201).json({ success: true, data: created });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: 'Gagal menambahkan potensi desa.' });
+  }
+});
+
+router.put('/potentials/:id', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+  try {
+    const { id } = req.params;
+    const { name, category, description, highlightStat, imageUrl, keyCommodities, keyOpportunities } = req.body;
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      const idx = (db.potentials || []).findIndex((p: any) => p.id === id);
+      if (idx === -1) return res.status(404).json({ success: false, error: 'Potensi desa tidak ditemukan.' });
+      db.potentials[idx] = { ...db.potentials[idx], ...req.body, id };
+      saveDb(db);
+      return res.json({ success: true, degraded: true, data: db.potentials[idx] });
+    }
+
+    const updated = await getPrisma().villagePotential.update({
+      where: { id },
+      data: {
+        name: name?.trim(),
+        category,
+        description,
+        highlightStat,
+        imageUrl,
+        keyCommodities: Array.isArray(keyCommodities) ? keyCommodities : undefined,
+        keyOpportunities: Array.isArray(keyOpportunities) ? keyOpportunities : undefined
+      }
+    });
+
+    await recordAuditLogDb(
+      req.user!.userId,
+      req.user!.name,
+      req.user!.role,
+      'Perbarui Potensi Desa',
+      'Potensi Desa',
+      `Memperbarui potensi desa: "${updated.name}"`,
+      req.ip || '127.0.0.1'
+    );
+
+    return res.json({ success: true, data: updated });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: 'Gagal memperbarui potensi desa.' });
+  }
+});
+
+router.delete('/potentials/:id', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+  try {
+    const { id } = req.params;
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.potentials = (db.potentials || []).filter((p: any) => p.id !== id);
+      saveDb(db);
+      return res.json({ success: true, degraded: true, message: 'Potensi desa berhasil dihapus.' });
+    }
+
+    const removed = await getPrisma().villagePotential.delete({ where: { id } });
+    await recordAuditLogDb(
+      req.user!.userId,
+      req.user!.name,
+      req.user!.role,
+      'Hapus Potensi Desa',
+      'Potensi Desa',
+      `Menghapus potensi desa: "${removed.name}"`,
+      req.ip || '127.0.0.1'
+    );
+
+    return res.json({ success: true, message: 'Potensi desa berhasil dihapus.' });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: 'Gagal menghapus potensi desa.' });
+  }
+});
+
+// 7d. APBDes / Budget Management (Admin Desa, Super Admin)
+router.get('/budget', requireRoles('super_admin', 'admin_desa', 'operator'), async (_req: AuthenticatedRequest, res: ExpressResponse) => {
+  try {
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      const history = Array.isArray(db.budgetHistory) && db.budgetHistory.length > 0
+        ? db.budgetHistory
+        : (db.budget ? [db.budget] : []);
+      return res.json({ success: true, degraded: true, data: history });
+    }
+
+    const budgets = await getPrisma().budgetYearData.findMany({
+      orderBy: { year: 'desc' }
+    });
+    return res.json({ success: true, data: budgets });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: 'Gagal memuat data APBDes.' });
+  }
+});
+
+router.put('/budget', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+  try {
+    const payload = req.body || {};
+    const year = Number(payload.year) || 2026;
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      const savedBudget = { ...payload, year, id: payload.id || `apbdes-${year}-${payload.documentType || 'murni'}` };
+      db.budget = savedBudget;
+      db.budgetHistory = Array.isArray(db.budgetHistory) ? db.budgetHistory : [];
+      const idx = db.budgetHistory.findIndex((b: any) => Number(b.year) === year && (b.documentType || 'murni') === (savedBudget.documentType || 'murni'));
+      if (idx >= 0) db.budgetHistory[idx] = savedBudget;
+      else db.budgetHistory.unshift(savedBudget);
+      saveDb(db);
+      return res.json({ success: true, degraded: true, data: savedBudget });
+    }
+
+    const docType = payload.documentType || 'murni';
+    const saved = await getPrisma().budgetYearData.upsert({
+      where: { year_documentType: { year, documentType: docType } },
+      update: {
+        documentType: docType,
+        status: payload.status || 'BERLAKU',
+        legalRefNumber: payload.legalRefNumber || null,
+        enactmentDate: payload.enactmentDate ? new Date(payload.enactmentDate) : null,
+        totalIncome: Number(payload.totalIncome) || 0,
+        totalIncomeRealized: Number(payload.totalIncomeRealized) || 0,
+        totalExpenditure: Number(payload.totalExpenditure) || 0,
+        totalExpenditureRealized: Number(payload.totalExpenditureRealized) || 0,
+        totalFinancing: Number(payload.totalFinancing) || 0,
+        totalFinancingRealized: Number(payload.totalFinancingRealized) || 0,
+        realizationPercentage: Number(payload.realizationPercentage) || 0,
+        incomeBreakdown: payload.incomeBreakdown || [],
+        expenditureBreakdown: payload.expenditureBreakdown || [],
+        incomeItems: payload.incomeItems || null,
+        expenditureItems: payload.expenditureItems || null,
+        financingItems: payload.financingItems || null,
+        publicDocuments: payload.publicDocuments || []
+      },
+      create: {
+        year,
+        documentType: docType,
+        status: payload.status || 'BERLAKU',
+        legalRefNumber: payload.legalRefNumber || null,
+        enactmentDate: payload.enactmentDate ? new Date(payload.enactmentDate) : null,
+        totalIncome: Number(payload.totalIncome) || 0,
+        totalIncomeRealized: Number(payload.totalIncomeRealized) || 0,
+        totalExpenditure: Number(payload.totalExpenditure) || 0,
+        totalExpenditureRealized: Number(payload.totalExpenditureRealized) || 0,
+        totalFinancing: Number(payload.totalFinancing) || 0,
+        totalFinancingRealized: Number(payload.totalFinancingRealized) || 0,
+        realizationPercentage: Number(payload.realizationPercentage) || 0,
+        incomeBreakdown: payload.incomeBreakdown || [],
+        expenditureBreakdown: payload.expenditureBreakdown || [],
+        incomeItems: payload.incomeItems || null,
+        expenditureItems: payload.expenditureItems || null,
+        financingItems: payload.financingItems || null,
+        publicDocuments: payload.publicDocuments || []
+      }
+    });
+
+    await recordAuditLogDb(
+      req.user!.userId,
+      req.user!.name,
+      req.user!.role,
+      'Perbarui APBDes',
+      'Transparansi APBDes',
+      `Memperbarui data APBDes Tahun Anggaran ${year} (${saved.documentType})`,
+      req.ip || '127.0.0.1'
+    );
+
+    return res.json({ success: true, data: saved });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: 'Gagal menyimpan data APBDes: ' + (error?.message || '') });
+  }
+});
+
 // 9. Village Officials Management (Aparatur, RT, RW, Karang Taruna, BPD, PKK)
 router.post('/officials', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { name, position, section, nip, bio, imageUrl, tenure, phone, gender, birthDate, isActive, displayOrder } = req.body;
     if (!name || !position) {
       return res.status(400).json({ success: false, error: 'Nama lengkap dan jabatan perangkat wajib diisi.' });
+    }
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.officials = db.officials || [];
+      const created = {
+        id: generateServerId('off'),
+        name: name.trim(),
+        position: position.trim(),
+        section: section || 'sekretariat',
+        nip: nip ? String(nip).trim() : null,
+        bio: bio || `Aparatur Pemerintahan Desa Pulau Betung - ${position.trim()}`,
+        imageUrl: imageUrl || 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=400&auto=format&fit=crop&q=80',
+        tenure: tenure || 'Aktif',
+        phone: phone ? String(phone).trim() : null,
+        gender: gender || 'Laki-laki',
+        birthDate: birthDate ? String(birthDate) : null,
+        isActive: isActive !== false,
+        displayOrder: typeof displayOrder === 'number' ? displayOrder : 0,
+        hasAdminAccess: Boolean(req.body.hasAdminAccess),
+        adminRole: req.body.adminRole || 'operator',
+        adminUsername: req.body.adminUsername || null,
+        allowedModules: req.body.allowedModules || []
+      };
+      db.officials.push(created);
+      saveDb(db);
+      return res.status(201).json({ success: true, degraded: true, message: 'Perangkat desa berhasil ditambahkan.', data: created });
     }
 
     const prisma = getPrisma();
@@ -1919,6 +2741,16 @@ router.put('/officials/:id', requireRoles('super_admin', 'admin_desa'), async (r
   try {
     const { id } = req.params;
     const { name, position, section, nip, bio, imageUrl, tenure, phone, gender, birthDate, isActive, displayOrder } = req.body;
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      const idx = (db.officials || []).findIndex((o: any) => o.id === id);
+      if (idx === -1) return res.status(404).json({ success: false, error: 'Perangkat desa tidak ditemukan.' });
+      db.officials[idx] = { ...db.officials[idx], ...req.body, id };
+      saveDb(db);
+      return res.json({ success: true, degraded: true, message: 'Data perangkat desa berhasil diperbarui.', data: db.officials[idx] });
+    }
+
     const prisma = getPrisma();
 
     const official = await prisma.villageOfficial.update({
@@ -1962,6 +2794,13 @@ router.put('/officials/:id', requireRoles('super_admin', 'admin_desa'), async (r
 router.delete('/officials/:id', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.officials = (db.officials || []).filter((o: any) => o.id !== id);
+      saveDb(db);
+      return res.json({ success: true, degraded: true, message: 'Data perangkat desa berhasil dihapus.' });
+    }
+
     const removed = await getPrisma().villageOfficial.delete({ where: { id } });
 
     await recordAuditLogDb(
@@ -1983,6 +2822,10 @@ router.delete('/officials/:id', requireRoles('super_admin', 'admin_desa'), async
 // 9b. Village Profile & Identity Management (Consolidated with DB)
 router.get('/profile', requireRoles('super_admin', 'admin_desa', 'operator', 'editor', 'admin_posyandu'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      return res.json({ success: true, degraded: true, data: db.villageProfile });
+    }
     const profile = await getPrisma().villageProfile.findUnique({
       where: { id: 'default' }
     });
@@ -2000,11 +2843,11 @@ router.put('/profile', requireRoles('super_admin', 'admin_desa'), async (req: Au
       villageLogoSecondaryUrl, regencyLogoUrl, sadewaLogoUrl,
       sadewaIconUrl, officialSignatureUrl, kadesPhotoUrl,
       regency, province, website, postalCode, history,
-      mapsEmbedUrl, officeLocation,
+      officeLocation,
       motto, kadesGreetingTitle, kadesGreeting,
       heroTitle, heroSubtitle, heroBackgroundUrl, heroBadgeText, heroIsActive,
       whatsappCenter, operatingHours, emergencyContacts, letterCodePrefix,
-      totalPopulation, totalFamilies, malePopulation, femalePopulation
+      totalPopulation, totalFamilies
     } = req.body;
 
     // Validasi Format Email
@@ -2013,6 +2856,21 @@ router.put('/profile', requireRoles('super_admin', 'admin_desa'), async (req: Au
     }
 
     const userRole = req.user!.role;
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      const existingFallback = db.villageProfile || ({} as any);
+      if (sadewaLogoUrl !== undefined && existingFallback.sadewaLogoUrl !== sadewaLogoUrl && userRole !== 'super_admin') {
+        return res.status(403).json({ success: false, error: 'Akses Ditolak: Hanya Super Admin yang boleh mengubah Logo Induk SADEWA.' });
+      }
+      if ((req.body.sadewaIconUrl !== undefined) && existingFallback.sadewaIconUrl !== req.body.sadewaIconUrl && userRole !== 'super_admin') {
+        return res.status(403).json({ success: false, error: 'Akses Ditolak: Hanya Super Admin yang boleh mengubah Ikon Simbol SADEWA.' });
+      }
+      db.villageProfile = { ...existingFallback, ...req.body, lastUpdated: new Date().toISOString() };
+      saveDb(db);
+      return res.json({ success: true, degraded: true, data: db.villageProfile });
+    }
+
     const existing = await getPrisma().villageProfile.findUnique({
       where: { id: 'default' }
     });
@@ -2062,7 +2920,6 @@ router.put('/profile', requireRoles('super_admin', 'admin_desa'), async (req: Au
         website: website?.trim(),
         postalCode: postalCode?.trim(),
         history: history?.trim(),
-        mapsEmbedUrl: mapsEmbedUrl?.trim(),
         officeLocation: officeLocation !== undefined ? officeLocation : undefined,
         motto: motto?.trim(),
         kadesGreetingTitle: kadesGreetingTitle?.trim(),
@@ -2181,6 +3038,10 @@ router.put('/profile', requireRoles('super_admin', 'admin_desa'), async (req: Au
 // 9c. Master Wilayah Hirarkis (Dusun -> RW -> RT) Management
 router.get('/territories', requireRoles('super_admin', 'admin_desa', 'operator', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      return res.json({ success: true, degraded: true, data: db.territories || [] });
+    }
     const prisma = getPrisma();
     const dusunList = await prisma.dusun.findMany({
       include: {
@@ -2205,50 +3066,147 @@ router.put('/territories', requireRoles('super_admin', 'admin_desa'), async (req
   }
 
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.territories = territories;
+      saveDb(db);
+      return res.json({
+        success: true,
+        degraded: true,
+        message: 'Master data wilayah (Dusun, RW, RT) berhasil diperbarui.',
+        data: db.territories
+      });
+    }
     const prisma = getPrisma();
     
-    // Sync data wilayah secara atomik dengan transaksi
+    // Sync data wilayah secara aman (ID-preserving upsert) agar tidak memicu FK Restrict crash pada tabel Resident
     await prisma.$transaction(async (tx: any) => {
-      // Untuk sederhananya dalam transisi, kita hapus dan buat ulang (RE-SYNC)
-      // karena struktur hirarkis yang dikirim dari UI biasanya full-snapshot
-      await tx.rT.deleteMany({});
-      await tx.rW.deleteMany({});
-      await tx.dusun.deleteMany({});
+      const existingDusuns = await tx.dusun.findMany({ select: { id: true } });
+      const existingRws = await tx.rW.findMany({ select: { id: true } });
+      const existingRts = await tx.rT.findMany({ select: { id: true } });
+
+      const existingDusunIds = new Set(existingDusuns.map((x: any) => x.id));
+      const existingRwIds = new Set(existingRws.map((x: any) => x.id));
+      const existingRtIds = new Set(existingRts.map((x: any) => x.id));
+
+      const seenDusunIds = new Set<string>();
+      const seenRwIds = new Set<string>();
+      const seenRtIds = new Set<string>();
 
       for (const d of territories) {
-        const newDusun = await tx.dusun.create({
-          data: {
-            name: d.name,
-            leaderName: d.leaderName,
-            isActive: d.isActive !== false
-          }
-        });
+        let savedDusun: any;
+        if (d.id && existingDusunIds.has(d.id)) {
+          savedDusun = await tx.dusun.update({
+            where: { id: d.id },
+            data: {
+              name: d.name,
+              leaderName: d.leaderName,
+              isActive: d.isActive !== false
+            }
+          });
+        } else {
+          savedDusun = await tx.dusun.create({
+            data: {
+              name: d.name,
+              leaderName: d.leaderName,
+              isActive: d.isActive !== false
+            }
+          });
+        }
+        seenDusunIds.add(savedDusun.id);
 
         if (Array.isArray(d.rws)) {
           for (const r of d.rws) {
-            const newRw = await tx.rW.create({
-              data: {
-                name: r.name,
-                leaderName: r.leaderName,
-                isActive: r.isActive !== false,
-                dusunId: newDusun.id
-              }
-            });
+            let savedRw: any;
+            if (r.id && existingRwIds.has(r.id)) {
+              savedRw = await tx.rW.update({
+                where: { id: r.id },
+                data: {
+                  name: r.name,
+                  leaderName: r.leaderName,
+                  isActive: r.isActive !== false,
+                  dusunId: savedDusun.id
+                }
+              });
+            } else {
+              savedRw = await tx.rW.create({
+                data: {
+                  name: r.name,
+                  leaderName: r.leaderName,
+                  isActive: r.isActive !== false,
+                  dusunId: savedDusun.id
+                }
+              });
+            }
+            seenRwIds.add(savedRw.id);
 
             if (Array.isArray(r.rts)) {
               for (const rt of r.rts) {
-                await tx.rT.create({
-                  data: {
-                    name: rt.name,
-                    leaderName: rt.leaderName,
-                    isActive: rt.isActive !== false,
-                    rwId: newRw.id,
-                    dusunId: newDusun.id
-                  }
-                });
+                let savedRt: any;
+                if (rt.id && existingRtIds.has(rt.id)) {
+                  savedRt = await tx.rT.update({
+                    where: { id: rt.id },
+                    data: {
+                      name: rt.name,
+                      leaderName: rt.leaderName,
+                      isActive: rt.isActive !== false,
+                      rwId: savedRw.id,
+                      dusunId: savedDusun.id
+                    }
+                  });
+                } else {
+                  savedRt = await tx.rT.create({
+                    data: {
+                      name: rt.name,
+                      leaderName: rt.leaderName,
+                      isActive: rt.isActive !== false,
+                      rwId: savedRw.id,
+                      dusunId: savedDusun.id
+                    }
+                  });
+                }
+                seenRtIds.add(savedRt.id);
               }
             }
           }
+        }
+      }
+
+      // Pembersihan aman bottom-up: hapus jika tidak direferensikan Resident, atau nonaktifkan jika masih dipakai
+      for (const oldRt of existingRts) {
+        if (seenRtIds.has(oldRt.id)) continue;
+        const refResidents = await tx.resident.count({ where: { rtId: oldRt.id } });
+        if (refResidents === 0) {
+          await tx.rT.delete({ where: { id: oldRt.id } });
+        } else {
+          await tx.rT.update({ where: { id: oldRt.id }, data: { isActive: false } });
+        }
+      }
+
+      for (const oldRw of existingRws) {
+        if (seenRwIds.has(oldRw.id)) continue;
+        const [refResidents, refRts] = await Promise.all([
+          tx.resident.count({ where: { rwId: oldRw.id } }),
+          tx.rT.count({ where: { rwId: oldRw.id } })
+        ]);
+        if (refResidents === 0 && refRts === 0) {
+          await tx.rW.delete({ where: { id: oldRw.id } });
+        } else {
+          await tx.rW.update({ where: { id: oldRw.id }, data: { isActive: false } });
+        }
+      }
+
+      for (const oldDusun of existingDusuns) {
+        if (seenDusunIds.has(oldDusun.id)) continue;
+        const [refResidents, refRws, refRts] = await Promise.all([
+          tx.resident.count({ where: { dusunId: oldDusun.id } }),
+          tx.rW.count({ where: { dusunId: oldDusun.id } }),
+          tx.rT.count({ where: { dusunId: oldDusun.id } })
+        ]);
+        if (refResidents === 0 && refRws === 0 && refRts === 0) {
+          await tx.dusun.delete({ where: { id: oldDusun.id } });
+        } else {
+          await tx.dusun.update({ where: { id: oldDusun.id }, data: { isActive: false } });
         }
       }
     });
@@ -2264,7 +3222,8 @@ router.put('/territories', requireRoles('super_admin', 'admin_desa'), async (req
     );
 
     const updated = await prisma.dusun.findMany({
-      include: { rws: { include: { rts: true } } }
+      include: { rws: { include: { rts: true } } },
+      orderBy: { name: 'asc' }
     });
 
     return res.json({
@@ -2283,6 +3242,26 @@ router.post('/facilities', requireRoles('super_admin', 'admin_desa'), async (req
     const { name, category, address, dusun, coordinatesLabel, description, coordinates, imageUrl, contact } = req.body;
     if (!name || !address) {
       return res.status(400).json({ success: false, error: 'Nama fasilitas dan alamat wajib diisi.' });
+    }
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.facilities = db.facilities || [];
+      const created = {
+        id: generateServerId('fac'),
+        name: name.trim(),
+        category: category || 'infrastruktur',
+        address: address.trim(),
+        dusun: dusun || 'Dusun Betung Indah',
+        coordinatesLabel: coordinatesLabel || (coordinates ? `${coordinates[0]}, ${coordinates[1]}` : '-1.5280, 103.3140'),
+        coordinates: coordinates || [-1.5280, 103.3140],
+        description: description || '',
+        imageUrl: imageUrl || 'https://images.unsplash.com/photo-1577495508048-b635879837f1?w=800&auto=format&fit=crop&q=80',
+        contact: contact || ''
+      };
+      db.facilities.unshift(created);
+      saveDb(db);
+      return res.status(201).json({ success: true, degraded: true, message: 'Fasilitas desa berhasil ditambahkan.', data: created });
     }
 
     const newFacility = await getPrisma().mapFacility.create({
@@ -2318,6 +3297,15 @@ router.post('/facilities', requireRoles('super_admin', 'admin_desa'), async (req
 router.put('/facilities/:id', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      const idx = (db.facilities || []).findIndex((f: any) => f.id === id);
+      if (idx === -1) return res.status(404).json({ success: false, error: 'Fasilitas desa tidak ditemukan.' });
+      db.facilities[idx] = { ...db.facilities[idx], ...req.body, id };
+      saveDb(db);
+      return res.json({ success: true, degraded: true, message: 'Fasilitas desa berhasil diperbarui.', data: db.facilities[idx] });
+    }
+
     const facility = await getPrisma().mapFacility.update({
       where: { id },
       data: req.body
@@ -2342,6 +3330,13 @@ router.put('/facilities/:id', requireRoles('super_admin', 'admin_desa'), async (
 router.delete('/facilities/:id', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.facilities = (db.facilities || []).filter((f: any) => f.id !== id);
+      saveDb(db);
+      return res.json({ success: true, degraded: true, message: 'Fasilitas desa berhasil dihapus.' });
+    }
+
     const removed = await getPrisma().mapFacility.delete({ where: { id } });
 
     await recordAuditLogDb(
@@ -2364,11 +3359,24 @@ router.delete('/facilities/:id', requireRoles('super_admin', 'admin_desa'), asyn
 // 9a. GET ALL AUDIT LOGS WITH PAGINATION
 router.get('/audit-logs', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
-    const prisma = getPrisma();
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit as string) || 50));
     const skip = (page - 1) * limit;
 
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      const allLogs = db.auditLogs || [];
+      const total = allLogs.length;
+      const logs = allLogs.slice(skip, skip + limit);
+      return res.json({
+        success: true,
+        degraded: true,
+        data: logs,
+        pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 1 }
+      });
+    }
+
+    const prisma = getPrisma();
     const [logs, total] = await Promise.all([
       prisma.auditLog.findMany({
         orderBy: { timestamp: 'desc' },
@@ -2401,6 +3409,10 @@ router.get('/audit-logs', requireRoles('super_admin', 'admin_desa'), async (req:
 // 12. Attendance Logs Management (Super Admin, Admin Desa, Operator)
 router.get('/attendance/all', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      return res.json({ success: true, degraded: true, data: db.attendance || [] });
+    }
     const logs = await getPrisma().attendanceLog.findMany({
       orderBy: { timestamp: 'desc' }
     });
@@ -2427,13 +3439,60 @@ router.post('/reset-data', requireRoles('super_admin'), async (req: Authenticate
   }
 
   try {
-    const prisma = getPrisma();
-    const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
+    const user = await getUserById(req.user!.userId);
     if (!user || !verifyPassword(adminPassword, user.passwordHash, user.salt)) {
       return res.status(401).json({ success: false, error: 'Gagal melakukan reset. Password admin salah.' });
     }
 
     const currentUserId = req.user!.userId;
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      const fresh = seedInitialData();
+      db.serviceRequests = [];
+      db.deletedServiceRequests = [];
+      db.complaints = [];
+      db.news = [];
+      db.announcements = [];
+      db.agendas = [];
+      db.gallery = [];
+      db.developmentProjects = [];
+      db.potentials = [];
+      db.umkm = [];
+      db.facilities = [];
+      db.landParcels = [];
+      db.toddlers = [];
+      db.kpm = [];
+      db.attendance = [];
+      db.residents = [];
+      db.officials = [];
+      db.services = fresh.services;
+      db.territories = fresh.territories;
+      db.villageProfile = fresh.villageProfile;
+      db.users = (db.users || []).filter((u: any) => u.id === currentUserId);
+      db.auditLogs = [
+        {
+          id: generateServerId('log'),
+          userId: currentUserId,
+          userName: req.user!.name,
+          userRole: req.user!.role,
+          action: 'SAAS FACTORY RESET',
+          module: 'Keamanan Sistem',
+          details: `Super Admin (${req.user!.name}) mengeksekusi SaaS Factory Reset (Mode Offline JSON). Log audit dipertahankan.`,
+          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+          level: 'critical'
+        },
+        ...(db.auditLogs || [])
+      ];
+      saveDb(db);
+      return res.json({
+        success: true,
+        degraded: true,
+        message: 'SaaS Factory Reset BERHASIL pada penyimpanan lokal. Akun Super Admin Anda tetap aktif.'
+      });
+    }
+
+    const prisma = getPrisma();
 
     // 1. FACTORY RESET: Hapus data transaksi, master, wilayah, kependudukan (AUDIT LOG DILEPAS & TIDAK DIHAPUS!)
     await prisma.serviceRequest.deleteMany({});
@@ -2633,34 +3692,10 @@ router.get('/backups', requireRoles('super_admin', 'admin_desa'), (req: Authenti
   }
 });
 
-// Create manual instant backup snapshot (Export Prisma to JSON)
+// Create manual instant backup snapshot (Export Prisma or JSON fallback to JSON)
 router.post('/backups/create', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
-    ensureBackupDir();
-    const prisma = getPrisma();
-    
-    // Tarik snapshot data utama dari Prisma
-    const [residents, serviceRequests, news, complaints] = await Promise.all([
-      prisma.resident.findMany(),
-      prisma.serviceRequest.findMany(),
-      prisma.newsItem.findMany(),
-      prisma.complaint.findMany()
-    ]);
-
-    const backupData = {
-      residents,
-      serviceRequests,
-      news,
-      complaints,
-      timestamp: new Date().toISOString()
-    };
-
-    const timestampStr = new Date().toISOString().replace(/[:.]/g, '-');
-    const fileName = `backup-supabase-${timestampStr}.json`;
-    const targetPath = path.join(BACKUP_DIR, fileName);
-
-    fs.writeFileSync(targetPath, JSON.stringify(backupData, null, 2), 'utf-8');
-    const stats = fs.statSync(targetPath);
+    const result = await runDatabaseBackup();
 
     await recordAuditLogDb(
       req.user!.userId,
@@ -2668,7 +3703,7 @@ router.post('/backups/create', requireRoles('super_admin', 'admin_desa'), async 
       req.user!.role,
       'Pencadangan Database Manual',
       'Backup & Recovery',
-      `Membuat ekspor cadangan JSON: ${fileName} (${(stats.size / 1024).toFixed(1)} KB)`,
+      `Membuat ekspor cadangan JSON (${result.mode}): ${result.fileName} (${(result.sizeBytes / 1024).toFixed(1)} KB)`,
       req.ip || '127.0.0.1'
     );
 
@@ -2676,9 +3711,10 @@ router.post('/backups/create', requireRoles('super_admin', 'admin_desa'), async 
       success: true,
       message: 'Salinan cadangan basis data berhasil dibuat.',
       data: {
-        fileName,
-        sizeBytes: stats.size,
-        createdAt: new Date().toISOString()
+        fileName: result.fileName,
+        sizeBytes: result.sizeBytes,
+        createdAt: result.createdAt,
+        mode: result.mode
       }
     });
   } catch (err: any) {
@@ -2723,6 +3759,10 @@ router.get('/backups/download/:filename', requireRoles('super_admin'), async (re
 // 13. KPM (Keluarga Penerima Manfaat) / Bansos Management
 router.get('/kpm', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      return res.json({ success: true, degraded: true, data: db.kpm || [] });
+    }
     const kpm = await getPrisma().bansosRecipient.findMany({
       include: { 
         resident: {
@@ -2774,7 +3814,22 @@ router.get('/kpm', requireRoles('super_admin', 'admin_desa', 'operator'), async 
 
 router.post('/kpm', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
-    let { residentId, nik, programName, fiscalYear, stageOrMonth, nominalAmount, status, notes } = req.body;
+    let { residentId, nik, programName, fiscalYear, stageOrMonth, period, nominalAmount, nominalOrItem, status, notes, keterangan } = req.body;
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.kpm = db.kpm || [];
+      const created = {
+        ...req.body,
+        id: req.body.id || generateServerId('kpm'),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      db.kpm.unshift(created);
+      saveDb(db);
+      return res.status(201).json({ success: true, degraded: true, data: created });
+    }
+
     const prisma = getPrisma();
 
     if (!residentId && nik) {
@@ -2807,15 +3862,27 @@ router.post('/kpm', requireRoles('super_admin', 'admin_desa', 'operator'), async
       });
     }
 
+    const parsedNominal = nominalAmount !== undefined
+      ? Number(nominalAmount)
+      : Number(String(nominalOrItem || '0').replace(/[^\d]/g, '')) || 0;
+    const mappedStatus =
+      status === 'tersalurkan' || status === 'SALUR_SELESAI'
+        ? 'SALUR_SELESAI'
+        : status === 'proses_verifikasi' || status === 'TERTUNDA'
+        ? 'TERTUNDA'
+        : status === 'GAGAL_SALUR'
+        ? 'GAGAL_SALUR'
+        : 'TERDAFTAR';
+
     const bansos = await prisma.bansosRecipient.create({
       data: {
         residentId,
         programName: programName || 'BLT Dana Desa (BLT-DD) TA 2026',
         fiscalYear: Number(fiscalYear) || 2026,
-        stageOrMonth: stageOrMonth || 'Tahap 1',
-        nominalAmount: Number(nominalAmount) || 0,
-        status: status || 'TERDAFTAR',
-        notes
+        stageOrMonth: stageOrMonth || period || 'Tahap 1',
+        nominalAmount: parsedNominal,
+        status: mappedStatus,
+        notes: notes || keterangan || null
       },
       include: { resident: true }
     });
@@ -2828,9 +3895,42 @@ router.post('/kpm', requireRoles('super_admin', 'admin_desa', 'operator'), async
 router.put('/kpm/:id', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.kpm = db.kpm || [];
+      const idx = db.kpm.findIndex((k: any) => k.id === id);
+      if (idx === -1) return res.status(404).json({ success: false, error: 'Data KPM tidak ditemukan.' });
+      db.kpm[idx] = { ...db.kpm[idx], ...req.body, id, updatedAt: new Date().toISOString() };
+      saveDb(db);
+      return res.json({ success: true, degraded: true, data: db.kpm[idx] });
+    }
+
+    const { programName, fiscalYear, stageOrMonth, period, nominalAmount, nominalOrItem, status, notes, keterangan } = req.body;
+    const mappedStatus =
+      status === 'tersalurkan' || status === 'SALUR_SELESAI'
+        ? 'SALUR_SELESAI'
+        : status === 'proses_verifikasi' || status === 'TERTUNDA'
+        ? 'TERTUNDA'
+        : status === 'GAGAL_SALUR'
+        ? 'GAGAL_SALUR'
+        : status === 'siap_diambil' || status === 'TERDAFTAR'
+        ? 'TERDAFTAR'
+        : undefined;
+
     const updated = await getPrisma().bansosRecipient.update({
       where: { id },
-      data: req.body,
+      data: {
+        programName: programName || undefined,
+        fiscalYear: fiscalYear !== undefined ? Number(fiscalYear) : undefined,
+        stageOrMonth: stageOrMonth || period || undefined,
+        nominalAmount: nominalAmount !== undefined
+          ? Number(nominalAmount)
+          : nominalOrItem !== undefined
+          ? Number(String(nominalOrItem).replace(/[^\d]/g, '')) || 0
+          : undefined,
+        status: mappedStatus,
+        notes: notes !== undefined ? notes : keterangan
+      },
       include: { resident: true }
     });
     return res.json({ success: true, data: updated });
@@ -2842,6 +3942,12 @@ router.put('/kpm/:id', requireRoles('super_admin', 'admin_desa', 'operator'), as
 router.delete('/kpm/:id', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.kpm = (db.kpm || []).filter((k: any) => k.id !== id);
+      saveDb(db);
+      return res.json({ success: true, degraded: true, message: 'Data KPM berhasil dihapus.' });
+    }
     await getPrisma().bansosRecipient.delete({ where: { id } });
     return res.json({ success: true, message: 'Data KPM berhasil dihapus.' });
   } catch (error: any) {
@@ -2849,11 +3955,13 @@ router.delete('/kpm/:id', requireRoles('super_admin', 'admin_desa', 'operator'),
   }
 });
 
-
-
 // 14. WebGIS & Spasial Land Parcels CRUD
 router.get('/land-parcels', requireRoles('super_admin', 'admin_desa', 'operator', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      return res.json({ success: true, degraded: true, data: db.landParcels || [] });
+    }
     const parcels = await getPrisma().landParcel.findMany({
       orderBy: { updatedAt: 'desc' }
     });
@@ -2866,6 +3974,26 @@ router.get('/land-parcels', requireRoles('super_admin', 'admin_desa', 'operator'
 router.post('/land-parcels', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const data = req.body;
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.landParcels = db.landParcels || [];
+      const created = {
+        ...data,
+        id: data.id || generateServerId('parcel'),
+        landAreaSqM: Number(data.landAreaSqM) || 0,
+        landAreaHectares: Number(data.landAreaHectares) || 0,
+        buildingAreaSqM: Number(data.buildingAreaSqM) || 0,
+        njopLandPerSqM: Number(data.njopLandPerSqM) || 0,
+        njopBuildingPerSqM: Number(data.njopBuildingPerSqM) || 0,
+        pbbTaxAmount: Number(data.pbbTaxAmount) || 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      db.landParcels.unshift(created);
+      saveDb(db);
+      return res.status(201).json({ success: true, degraded: true, data: created });
+    }
+
     const parcel = await getPrisma().landParcel.create({
       data: {
         ...data,
@@ -2901,6 +4029,16 @@ router.put('/land-parcels/:id', requireRoles('super_admin', 'admin_desa', 'opera
   try {
     const { id } = req.params;
     const data = req.body;
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.landParcels = db.landParcels || [];
+      const idx = db.landParcels.findIndex((p: any) => p.id === id);
+      if (idx === -1) return res.status(404).json({ success: false, error: 'Data persil tanah tidak ditemukan.' });
+      db.landParcels[idx] = { ...db.landParcels[idx], ...data, id, updatedAt: new Date().toISOString() };
+      saveDb(db);
+      return res.json({ success: true, degraded: true, data: db.landParcels[idx] });
+    }
+
     const updated = await getPrisma().landParcel.update({
       where: { id },
       data: {
@@ -2935,6 +4073,13 @@ router.put('/land-parcels/:id', requireRoles('super_admin', 'admin_desa', 'opera
 router.delete('/land-parcels/:id', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.landParcels = (db.landParcels || []).filter((p: any) => p.id !== id);
+      saveDb(db);
+      return res.json({ success: true, degraded: true, message: 'Data persil tanah berhasil dihapus.' });
+    }
+
     const deleted = await getPrisma().landParcel.delete({ where: { id } });
 
     await recordAuditLogDb(
@@ -2991,27 +4136,31 @@ router.get('/maintenance/backups/download/:filename', requireRoles('super_admin'
 });
 
 router.post('/maintenance/backups/run', requireRoles('super_admin'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
-  const { exec } = await import('child_process');
-  const util = await import('util');
-  const execPromise = util.promisify(exec);
-
   try {
-    // Run the script we just created
-    await execPromise('npx tsx server/scripts/db-backup.ts');
-    
-    recordAuditLogDb(
+    const result = await runDatabaseBackup();
+
+    await recordAuditLogDb(
       req.user!.userId,
       req.user!.name,
       req.user!.role,
       'Jalankan Backup Manual',
       'Pemeliharaan',
-      'Admin menjalankan backup database manual ke file JSON.',
+      `Admin menjalankan backup database manual (${result.mode}) ke file ${result.fileName}.`,
       req.ip || '127.0.0.1'
     );
 
-    return res.json({ success: true, message: 'Backup berhasil dibuat secara instan.' });
+    return res.json({
+      success: true,
+      message: 'Backup berhasil dibuat secara instan.',
+      data: {
+        filename: result.fileName,
+        size: result.sizeBytes,
+        createdAt: result.createdAt,
+        mode: result.mode
+      }
+    });
   } catch (error: any) {
-    console.error('❌ [BACKUP-RUN-ERROR]:', error.message);
+    console.error('❌ [BACKUP-RUN-ERROR]:', error?.message || error);
     return res.status(500).json({ success: false, error: 'Gagal menjalankan proses backup.' });
   }
 });
@@ -3032,6 +4181,15 @@ router.put('/complaints/:id/visibility', requireRoles('super_admin', 'admin_desa
   try {
     const { id } = req.params;
     const { isPublic } = req.body;
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      const idx = (db.complaints || []).findIndex((c: any) => c.id === id);
+      if (idx === -1) return res.status(404).json({ success: false, error: 'Aduan tidak ditemukan.' });
+      db.complaints[idx] = { ...db.complaints[idx], isPublic: !!isPublic, updatedAt: new Date().toISOString() };
+      saveDb(db);
+      return res.json({ success: true, degraded: true, data: db.complaints[idx] });
+    }
     
     const updated = await getPrisma().complaint.update({
       where: { id },
@@ -3044,12 +4202,68 @@ router.put('/complaints/:id/visibility', requireRoles('super_admin', 'admin_desa
   }
 });
 
-// --- MASTER RESET DATABASE ENDPOINT (SUPER ADMIN ONLY) ---
+// --- MASTER RESET DATABASE ENDPOINT (SUPER ADMIN ONLY, HARDENED) ---
 router.post('/reset-database', requireRoles('super_admin'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
+    const { adminPassword, confirmationText } = req.body || {};
+
+    if (!adminPassword || typeof adminPassword !== 'string') {
+      return res.status(400).json({ success: false, error: 'Password Super Admin wajib diisi untuk otorisasi reset database.' });
+    }
+
+    const allowedConfirmTexts = ['HAPUS SEMUA DATA', 'RESET_DATABASE_DESA_SADEWA_PERMANEN', 'RESET'];
+    if (!confirmationText || !allowedConfirmTexts.includes(confirmationText)) {
+      return res.status(400).json({ success: false, error: 'Teks konfirmasi reset tidak sesuai.' });
+    }
+
+    const adminUser = await getUserById(req.user!.userId);
+    if (!adminUser || !verifyPassword(adminPassword, adminUser.passwordHash, adminUser.salt)) {
+      return res.status(401).json({ success: false, error: 'Password Super Admin salah. Reset dibatalkan.' });
+    }
+
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb();
+      db.residents = [];
+      db.kpm = [];
+      db.toddlers = [];
+      db.deletedServiceRequests = [];
+      db.serviceRequests = [];
+      db.complaints = [];
+      db.developmentProjects = [];
+      db.landParcels = [];
+      db.news = [];
+      db.announcements = [];
+      db.agendas = [];
+      db.gallery = [];
+      db.umkm = [];
+      db.facilities = [];
+      db.attendance = [];
+      // Audit logs tetap dipertahankan untuk jejak forensik keamanan
+      db.auditLogs = [
+        {
+          id: generateServerId('log'),
+          userId: req.user!.userId,
+          userName: req.user!.name,
+          userRole: req.user!.role,
+          action: 'Reset Master Database',
+          module: 'Pemeliharaan',
+          details: 'Pembersihan seluruh data operasional desa (Mode JSON Fallback). Log audit dipertahankan.',
+          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+          level: 'critical'
+        },
+        ...(db.auditLogs || [])
+      ];
+      saveDb(db);
+      return res.json({
+        success: true,
+        degraded: true,
+        message: 'Seluruh data operasional berhasil dibersihkan pada penyimpanan lokal (Log audit tetap dipertahankan).'
+      });
+    }
+
     const prisma = getPrisma();
-    
-    // Clear all operational tables in Prisma / Supabase
+
+    // Clear all operational tables in Prisma / Supabase (AuditLog TIDAK dihapus agar jejak forensik tetap utuh)
     await prisma.$transaction([
       prisma.toddlerMeasurement.deleteMany({}),
       prisma.toddlerRecord.deleteMany({}),
@@ -3066,8 +4280,7 @@ router.post('/reset-database', requireRoles('super_admin'), async (req: Authenti
       prisma.galleryItem.deleteMany({}),
       prisma.umkmItem.deleteMany({}),
       prisma.mapFacility.deleteMany({}),
-      prisma.attendanceLog.deleteMany({}),
-      prisma.auditLog.deleteMany({})
+      prisma.attendanceLog.deleteMany({})
     ]);
 
     await recordAuditLogDb(
@@ -3076,22 +4289,29 @@ router.post('/reset-database', requireRoles('super_admin'), async (req: Authenti
       req.user!.role,
       'Reset Master Database',
       'Pemeliharaan',
-      'Pembersihan total seluruh data dummy operasional desa.',
+      'Pembersihan total seluruh data dummy operasional desa (Log audit tetap dipertahankan).',
       req.ip || '127.0.0.1'
     );
 
-    return res.json({ success: true, message: 'Seluruh data dummy berhasil dibersihkan dari database Supabase.' });
+    return res.json({ success: true, message: 'Seluruh data dummy berhasil dibersihkan dari database Supabase (Log audit tetap dipertahankan).' });
   } catch (error: any) {
-    console.error('❌ [RESET-DB-ERROR]:', error);
+    console.error('❌ [RESET-DB-ERROR]:', error?.message || error);
     return res.status(500).json({ success: false, error: 'Gagal mereset database: ' + (error?.message || '') });
   }
 });
 
-// --- STORAGE ARCHITECTURE REGISTRY MAP (ADMIN READ-ONLY) ---
+// --- STORAGE & ADMIN ARCHITECTURE REGISTRY MAP (ADMIN READ-ONLY) ---
 router.get('/storage-map', requireRoles('super_admin', 'admin_desa'), (_req: AuthenticatedRequest, res: ExpressResponse) => {
   return res.json({
     success: true,
     data: getStorageArchitectureSummary()
+  });
+});
+
+router.get('/panel-map', requireRoles('super_admin', 'admin_desa'), (_req: AuthenticatedRequest, res: ExpressResponse) => {
+  return res.json({
+    success: true,
+    data: getAdminArchitectureMap()
   });
 });
 

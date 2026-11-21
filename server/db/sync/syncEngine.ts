@@ -805,8 +805,9 @@ export async function executeDualWriteSync(dbData: any): Promise<void> {
     try {
       await prisma.$transaction(async (tx: TransactionClient) => {
         const b = dbData.budget;
+        const docType = b.documentType || 'murni';
         await tx.budgetYearData.upsert({
-          where: { year: b.year || 2026 },
+          where: { year_documentType: { year: b.year || 2026, documentType: docType } },
           update: {
             totalIncome: b.totalIncome || 0,
             totalIncomeRealized: b.totalIncomeRealized || 0,
@@ -817,8 +818,9 @@ export async function executeDualWriteSync(dbData: any): Promise<void> {
             publicDocuments: b.publicDocuments || []
           },
           create: {
-            id: b.id || 'budget-2026',
+            id: b.id || `budget-${b.year || 2026}-${docType}`,
             year: b.year || 2026,
+            documentType: docType,
             totalIncome: b.totalIncome || 0,
             totalExpenditure: b.totalExpenditure || 0,
             incomeBreakdown: b.incomeBreakdown || [],

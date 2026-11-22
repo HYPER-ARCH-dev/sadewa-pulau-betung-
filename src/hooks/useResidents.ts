@@ -3,6 +3,7 @@ import { Resident } from '../types/resident';
 import { cleanCitizenName, cleanCitizenNik } from '../utils/formatting';
 import { api } from '../services/api';
 import { useApp } from '../context/AppContext';
+import { getTenantAuthToken } from '../utils/tenantStorage';
 
 export const useResidents = () => {
   const { currentUser, isLoading: isAppLoading } = useApp();
@@ -11,7 +12,7 @@ export const useResidents = () => {
   const [error, setError] = useState<string | null>(null);
 
   const fetchResidents = useCallback(async () => {
-    const token = localStorage.getItem('pulau_betung_auth_token');
+    const token = getTenantAuthToken();
     const isAuthorized = !!token && !!currentUser && (currentUser.role === 'super_admin' || currentUser.role === 'admin_desa' || currentUser.role === 'operator');
 
     if (!isAuthorized) {

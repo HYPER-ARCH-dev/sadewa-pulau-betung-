@@ -2,13 +2,14 @@ import { useState, useEffect, useCallback } from 'react';
 import { ServiceRequest, DeletedServiceRequestRecord, User } from '../types';
 import { INITIAL_SERVICE_REQUESTS } from '../data/initialData';
 import { api } from '../services/api';
+import { getTenantAuthToken } from '../utils/tenantStorage';
 
 export const useServiceRequests = (currentUser?: User | null) => {
   const [serviceRequests, setServiceRequests] = useState<ServiceRequest[]>(INITIAL_SERVICE_REQUESTS);
   const [deletedRequests, setDeletedRequests] = useState<DeletedServiceRequestRecord[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const token = typeof window !== 'undefined' ? localStorage.getItem('pulau_betung_auth_token') : null;
+  const token = getTenantAuthToken();
   const isAuthorized =
     !!token &&
     !!currentUser &&

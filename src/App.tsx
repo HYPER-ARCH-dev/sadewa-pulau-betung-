@@ -75,6 +75,7 @@ const ContactView = lazyWithRetry(() => import('./components/public/ContactView'
 const AdminDashboard = lazyWithRetry(() => import('./components/admin/AdminDashboard').then(m => ({ default: m.AdminDashboard || (m as any).default })), 'AdminDashboard');
 const PosyanduManager = lazyWithRetry(() => import('./components/admin/PosyanduManager').then(m => ({ default: m.PosyanduManager || (m as any).default })), 'PosyanduManager');
 const TestDynamicForm = lazyWithRetry(() => import('./components/admin/TestDynamicForm').then(m => ({ default: m.TestDynamicForm || (m as any).default })), 'TestDynamicForm');
+const PlatformPortal = lazyWithRetry(() => import('./components/platform/PlatformPortal').then(m => ({ default: m.PlatformPortal || (m as any).default })), 'PlatformPortal');
 
 const PageSkeleton = () => {
   const { villageProfile } = useAppContext();
@@ -537,7 +538,33 @@ const MainContent: React.FC = () => {
   );
 };
 
+function isPlatformPortalRoute(): boolean {
+  if (typeof window === 'undefined') return false;
+  const pathname = window.location.pathname || '/';
+  const host = (window.location.hostname || '').toLowerCase();
+  if (pathname === '/platform' || pathname.startsWith('/platform/')) {
+    return true;
+  }
+  return host === 'platform.sadewa.id' || host.startsWith('platform.');
+}
+
 export default function App() {
+  if (isPlatformPortalRoute()) {
+    return (
+      <ModuleErrorBoundary>
+        <Suspense
+          fallback={
+            <div className="min-h-screen bg-slate-950 text-slate-300 flex items-center justify-center text-xs font-mono">
+              Memuat SADEWA Control Plane...
+            </div>
+          }
+        >
+          <PlatformPortal />
+        </Suspense>
+      </ModuleErrorBoundary>
+    );
+  }
+
   return (
     <AppProvider>
       <MainContent />

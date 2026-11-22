@@ -149,6 +149,14 @@ export function logSyncFailure(entityName: string, payload: any, error: any): vo
 
 // 3. COMPLETE 22-ENTITY DUAL WRITE EXECUTOR (STRONGLY TYPED)
 export async function executeDualWriteSync(dbData: any): Promise<void> {
+  if (
+    process.env.MULTI_TENANT_ROUTING === 'true' ||
+    process.env.MIGRATION_PHASE === 'PHASE_3_SUPABASE_ONLY'
+  ) {
+    console.warn('🛑 [DUAL-WRITE-ABORTED]: executeDualWriteSync dinonaktifkan pada mode Multi-Tenant atau PHASE_3_SUPABASE_ONLY.');
+    return;
+  }
+
   const prisma = getPrismaClient();
   if (!prisma) return;
 

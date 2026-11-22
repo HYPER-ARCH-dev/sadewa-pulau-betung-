@@ -8,15 +8,32 @@
 
 import express from 'express';
 import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import path from 'path';
 import fs from 'fs';
 import { getSessionSecret } from './auth';
-import { probeDatabaseStatus } from './db/prisma-helpers';
+import {
+  probeDatabaseStatus,
+  getVillageProfile,
+  isDatabaseAvailableCached,
+  isJsonFallbackAllowed
+} from './db/prisma-helpers';
+import { getDb } from './db/database';
+import {
+  getCurrentTenantContext,
+  isMultiTenantRoutingEnabled,
+  runWithTenantContext
+} from './db/tenantContext';
+import {
+  extractTenantRequestHostname,
+  tenantResolverMiddleware,
+  resolveTenantContextBySlug
+} from './middleware/tenantResolver';
 import { sanitizeDiagnosticMessage } from './db/connection-diagnostic';
 import authRouter from './routes/auth';
 import publicRouter from './routes/public';
 import adminRouter from './routes/admin';
+import platformRouter from './routes/platform';
 import uploadRouter from './routes/upload';
 import aiRouter from './routes/ai';
 import { SERVER_CONFIG } from './config/constants';
@@ -37,11 +54,33 @@ export function createApiApp(): express.Express {
   }));
 
   // ==========================================================================
-  // 🛡️ SISTEM PEMBATAS KECEPATAN (RATE LIMITERS)
+  // 🛡️ SISTEM PEMBATAS KECEPATAN TERISOLASI PER-TENANT (NOISY-NEIGHBOR GUARD)
   // ==========================================================================
+  const tenantKeyGenerator = (req: express.Request): string => {
+    const ctx = getCurrentTenantContext();
+    const tenantScopeKey =
+      ctx?.tenantId ||
+      (ctx?.isPlatformScope ? 'platform' : null) ||
+      extractTenantRequestHostname(req) ||
+      'default';
+    return `${tenantScopeKey}:${ipKeyGenerator(req.ip || '127.0.0.1')}`;
+  };
+
+  const tenantApiBurstMax = Math.max(30, Number.parseInt(process.env.TENANT_API_RATE_LIMIT_PER_MIN || '300', 10) || 300);
+  const tenantApiBurstLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: tenantApiBurstMax,
+    keyGenerator: tenantKeyGenerator,
+    skip: (req) => req.path === '/health' || req.originalUrl === '/api/health',
+    message: { success: false, error: 'Batas permintaan API per menit untuk portal ini tercapai. Coba sebentar lagi.' },
+    standardHeaders: true,
+    legacyHeaders: false
+  });
+
   const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 10,
+    keyGenerator: tenantKeyGenerator,
     message: { success: false, error: 'Terlalu banyak percobaan masuk. Silakan coba lagi dalam 15 menit.' },
     standardHeaders: true,
     legacyHeaders: false,
@@ -50,6 +89,7 @@ export function createApiApp(): express.Express {
   const publicPostLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
     max: 20,
+    keyGenerator: tenantKeyGenerator,
     message: { success: false, error: 'Batas kiriman per jam tercapai. Silakan coba lagi nanti.' },
     standardHeaders: true,
     legacyHeaders: false,
@@ -58,6 +98,7 @@ export function createApiApp(): express.Express {
   const aiQueryLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
     max: 50,
+    keyGenerator: tenantKeyGenerator,
     message: { success: false, error: 'Batas tanya AI per jam tercapai. Silakan coba lagi nanti.' },
     standardHeaders: true,
     legacyHeaders: false,
@@ -66,6 +107,7 @@ export function createApiApp(): express.Express {
   const attendanceLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
     max: 30,
+    keyGenerator: tenantKeyGenerator,
     message: { success: false, error: 'Batas absensi tercapai. Silakan coba lagi nanti.' },
     standardHeaders: true,
     legacyHeaders: false,
@@ -74,6 +116,7 @@ export function createApiApp(): express.Express {
   const uploadLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
     max: 10,
+    keyGenerator: tenantKeyGenerator,
     message: { success: false, error: 'Batas unggah berkas tercapai. Silakan coba lagi nanti.' },
     standardHeaders: true,
     legacyHeaders: false,
@@ -95,6 +138,12 @@ export function createApiApp(): express.Express {
   });
 
   // ==========================================================================
+  // 🌐 MULTI-TENANT HOST RESOLVER + NOISY-NEIGHBOR API LIMITER
+  // ==========================================================================
+  app.use(['/api', '/manifest.webmanifest', '/verify-document', '/verify', '/v'], tenantResolverMiddleware);
+  app.use('/api', tenantApiBurstLimiter);
+
+  // ==========================================================================
   // 📂 PENYIMPANAN BERKAS & GAMBAR HASIL UNGGAH (UPLOADS STORAGE)
   // ==========================================================================
   const publicUploadsStaticDir = SERVER_CONFIG.PUBLIC_UPLOAD_DIR;
@@ -113,6 +162,51 @@ export function createApiApp(): express.Express {
   }
 
   // ==========================================================================
+  // 📱 MANIFEST PWA DINAMIS PER-DESA (/manifest.webmanifest)
+  // ==========================================================================
+  app.get('/manifest.webmanifest', async (_req, res) => {
+    const ctx = getCurrentTenantContext();
+    let villageName = ctx?.tenantName || 'SADEWA - Portal Digital Desa';
+    let shortName = ctx?.tenantName ? ctx.tenantName.replace(/^Desa\s+/i, '').slice(0, 14) : 'SADEWA';
+    let description = 'Sistem Informasi & Pelayanan Administrasi Desa Terpadu';
+
+    try {
+      if (await isDatabaseAvailableCached()) {
+        const profile = await getVillageProfile();
+        if (profile?.villageName) {
+          villageName = `Portal ${profile.villageName}`;
+          shortName = profile.villageName.replace(/^Desa\s+/i, '').slice(0, 14) || shortName;
+          description = `Layanan Administrasi & Transparansi ${profile.villageName}`;
+        }
+      } else if (isJsonFallbackAllowed()) {
+        const fallbackProfile = getDb().villageProfile;
+        if (fallbackProfile?.villageName) {
+          villageName = `Portal ${fallbackProfile.villageName}`;
+          shortName = fallbackProfile.villageName.replace(/^Desa\s+/i, '').slice(0, 14) || shortName;
+        }
+      }
+    } catch {
+      // Gunakan metadata tenant default jika query profil tertunda
+    }
+
+    res.setHeader('Content-Type', 'application/manifest+json');
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    return res.json({
+      name: villageName,
+      short_name: shortName,
+      description,
+      start_url: '/',
+      display: 'standalone',
+      background_color: '#f8fafc',
+      theme_color: '#047857',
+      icons: [
+        { src: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' },
+        { src: '/favicon.svg', sizes: 'any', type: 'image/svg+xml' }
+      ]
+    });
+  });
+
+  // ==========================================================================
   // 🩺 CEK KESEHATAN SISTEM (HEALTH CHECK ENDPOINT)
   // ==========================================================================
   app.get('/api/health', async (_req, res) => {
@@ -123,6 +217,7 @@ export function createApiApp(): express.Express {
       sessionSecretReady = false;
     }
 
+    const ctx = getCurrentTenantContext();
     const dbUrl = process.env.DATABASE_URL || '';
     const directUrl = process.env.DIRECT_URL || '';
 
@@ -133,10 +228,14 @@ export function createApiApp(): express.Express {
 
     res.json({
       status: 'ok',
-      service: 'Sistem Informasi & Pelayanan Administrasi Desa Pulau Betung',
+      service: ctx?.tenantName
+        ? `Sistem Informasi & Pelayanan Administrasi ${ctx.tenantName}`
+        : 'Sistem Informasi & Pelayanan Administrasi Desa SADEWA',
       version: '1.0.0',
       runtime: SERVER_CONFIG.IS_SERVERLESS ? 'serverless' : 'node',
       checks: {
+        multiTenantRouting: isMultiTenantRoutingEnabled(),
+        tenantScope: ctx?.isPlatformScope ? 'platform' : (ctx?.slug || 'legacy-single-tenant'),
         databaseConfigured: Boolean(dbUrl),
         directUrlConfigured: Boolean(directUrl),
         sessionSecretReady,
@@ -170,13 +269,14 @@ export function createApiApp(): express.Express {
   app.use('/api/public', publicRouter);
 
   app.use('/api/admin', adminRouter);
+  app.use('/api/platform', platformRouter);
   app.use('/api/upload', uploadLimiter, uploadRouter);
   app.use('/api/ai', aiQueryLimiter, aiRouter);
 
   app.use('/api', publicRouter);
 
   // ==========================================================================
-  // 🔍 PEMERIKSAAN KEASLIAN SURAT VIA QR CODE (/verify-document)
+  // 🔍 PEMERIKSAAN KEASLIAN SURAT VIA QR CODE (/verify-document & /v/:slug/verify/:identifier)
   // ==========================================================================
   app.get(['/verify-document', '/verify/:identifier'], (req, res, next) => {
     const isJsonRequested = (req.headers.accept && req.headers.accept.includes('application/json')) ||
@@ -185,6 +285,32 @@ export function createApiApp(): express.Express {
       return (publicRouter as any).handle(req, res, next);
     }
     next();
+  });
+
+  app.get('/v/:slug/verify/:identifier', async (req, res, next) => {
+    const isJsonRequested = (req.headers.accept && req.headers.accept.includes('application/json')) ||
+      req.query.format === 'json';
+    if (!isJsonRequested) {
+      return next();
+    }
+
+    try {
+      const slugCtx = await resolveTenantContextBySlug(req.params.slug);
+      if (slugCtx) {
+        return runWithTenantContext(slugCtx, () => (publicRouter as any).handle(req, res, next));
+      }
+      if (isMultiTenantRoutingEnabled()) {
+        return res.status(404).json({
+          success: false,
+          verified: false,
+          reason: 'TENANT_NOT_FOUND',
+          error: `Portal desa '${req.params.slug}' tidak ditemukan atau tidak aktif.`
+        });
+      }
+      return (publicRouter as any).handle(req, res, next);
+    } catch (err: any) {
+      return next(err);
+    }
   });
 
   // ==========================================================================

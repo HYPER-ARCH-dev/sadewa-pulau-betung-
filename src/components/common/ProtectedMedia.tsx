@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { getTenantAuthToken } from '../../utils/tenantStorage';
 
 function needsAuthHeader(url?: string | null): boolean {
   if (!url) return false;
@@ -6,8 +7,7 @@ function needsAuthHeader(url?: string | null): boolean {
 }
 
 function getAuthToken(): string | null {
-  if (typeof window === 'undefined') return null;
-  return localStorage.getItem('pulau_betung_auth_token');
+  return getTenantAuthToken();
 }
 
 export interface AuthorizedImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {

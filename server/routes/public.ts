@@ -1,11 +1,17 @@
 import { Router, Request, Response as ExpressResponse } from 'express';
 import crypto from 'crypto';
-import { getPrisma, getVillageProfile, isDatabaseAvailableCached } from '../db/prisma-helpers';
+import {
+  getPrisma,
+  getVillageProfile,
+  isDatabaseAvailableCached,
+  isJsonFallbackAllowed
+} from '../db/prisma-helpers';
+import { getCurrentTenantContext } from '../db/tenantContext';
 import { getDb } from '../db/database';
 import { sanitizeDiagnosticMessage } from '../db/connection-diagnostic';
 import { hashPassword, verifyPassword, verifyToken } from '../auth';
 
-const allowJsonFallback = () => process.env.MIGRATION_PHASE !== 'PHASE_3_SUPABASE_ONLY';
+const allowJsonFallback = () => isJsonFallbackAllowed();
 
 // 🏛️ INISIALISASI ROUTER UNTUK LAYANAN PUBLIK
 // Jalur ini bisa diakses siapa saja (Warga, Pengunjung, Bot) tanpa perlu login admin.
@@ -84,6 +90,21 @@ function checkRateLimit(ip: string): { allowed: boolean; retryAfterMin?: number 
   return { allowed: true };
 }
 // ------------------------
+
+router.get('/tenant-info', (_req: Request, res: ExpressResponse) => {
+  const ctx = getCurrentTenantContext();
+  return res.json({
+    success: true,
+    data: ctx?.tenantId
+      ? {
+          id: ctx.tenantId,
+          slug: ctx.slug,
+          name: ctx.tenantName || null,
+          tenancyMode: ctx.tenancyMode
+        }
+      : null
+  });
+});
 
 // 1. All public data bundle for efficient bootstrapping
 router.get('/bootstrap', async (req: Request, res: ExpressResponse) => {
@@ -323,14 +344,25 @@ router.post('/services/apply', async (req: Request, res: ExpressResponse) => {
     }
 
     const prisma = getPrisma();
-    const service = await prisma.villageService.findUnique({ where: { id: serviceId } });
-    
+    const service = await prisma.villageService.findFirst({ where: { id: serviceId } });
+
     if (!service) {
       return res.status(404).json({ success: false, error: 'Layanan administrasi tidak ditemukan.' });
     }
 
+    const activeCtx = getCurrentTenantContext();
+    const profile = await getVillageProfile().catch(() => null);
+    const shortCode = (
+      profile?.letterCodePrefix?.split('-')[0] ||
+      activeCtx?.letterCodePrefix?.split('-')[0] ||
+      'PB'
+    )
+      .replace(/[^A-Z0-9]/gi, '')
+      .slice(0, 6)
+      .toUpperCase() || 'PB';
+
     // Generate Secure Tracking Code (UUID based to prevent collision)
-    const trackingCode = `REQ-PB-${new Date().getFullYear()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+    const trackingCode = `REQ-${shortCode}-${new Date().getFullYear()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
 
     const newRequest = await prisma.serviceRequest.create({
       data: {
@@ -358,9 +390,10 @@ router.post('/services/apply', async (req: Request, res: ExpressResponse) => {
       }
     });
 
+    const villageDisplayName = profile?.villageName || activeCtx?.tenantName || 'Pemerintah Desa';
     return res.status(201).json({
       success: true,
-      message: 'Permohonan surat berhasil dikirim ke Kantor Desa Pulau Betung.',
+      message: `Permohonan surat berhasil dikirim ke Kantor ${villageDisplayName}.`,
       data: {
         id: newRequest.id,
         trackingCode: newRequest.trackingCode,
@@ -390,7 +423,7 @@ router.get('/tracking/:code', async (req: Request, res: ExpressResponse) => {
     const rawCode = (req.params.code || '').trim();
     const prisma = getPrisma();
 
-    const found = await prisma.serviceRequest.findUnique({
+    const found = await prisma.serviceRequest.findFirst({
       where: { trackingCode: rawCode },
       select: {
         status: true,
@@ -460,30 +493,44 @@ const handleDocumentVerification = async (req: Request, res: ExpressResponse) =>
     const prisma = getPrisma();
     const cleanSearchKey = searchKey.toUpperCase().replace(/[^A-Z0-9]/g, '');
 
-    const requestItem = await prisma.serviceRequest.findFirst({
-      where: {
-        OR: [
-          { trackingCode: { in: candidateKeys } },
-          { officialLetterNumber: { in: candidateKeys } },
-          { id: { in: candidateKeys } },
-          { trackingCode: { contains: cleanSearchKey, mode: 'insensitive' } },
-          { officialLetterNumber: { contains: cleanSearchKey, mode: 'insensitive' } }
-        ]
-      }
-    });
+    const [requestItem, activeProfile] = await Promise.all([
+      prisma.serviceRequest.findFirst({
+        where: {
+          OR: [
+            { trackingCode: { in: candidateKeys } },
+            { officialLetterNumber: { in: candidateKeys } },
+            { id: { in: candidateKeys } },
+            { trackingCode: { contains: cleanSearchKey, mode: 'insensitive' } },
+            { officialLetterNumber: { contains: cleanSearchKey, mode: 'insensitive' } }
+          ]
+        }
+      }),
+      getVillageProfile().catch(() => null)
+    ]);
+
+    const snapshot = (requestItem?.letterheadSnapshot || null) as Record<string, any> | null;
+    const authorityVillageName =
+      snapshot?.villageName ||
+      activeProfile?.villageName ||
+      getCurrentTenantContext()?.tenantName ||
+      'Desa Pulau Betung';
+    const authorityDistrict = snapshot?.district || activeProfile?.district || 'Kecamatan Pemayung';
+    const authorityRegency = snapshot?.regency || activeProfile?.regency || 'Kabupaten Batang Hari';
+    const authorityPrefix = activeProfile?.letterCodePrefix || getCurrentTenantContext()?.letterCodePrefix || 'PB-PMY';
+    const fullAuthority = `Pemerintah ${authorityVillageName}, ${authorityDistrict}, ${authorityRegency}`;
 
     if (!requestItem) {
       return res.status(404).json({
         success: false,
         verified: false,
         reason: 'DOCUMENT_NOT_FOUND',
-        error: `Dokumen dengan nomor registrasi / kode '${searchKey}' TIDAK DITEMUKAN dalam arsip resmi Pemerintah Desa Pulau Betung.`
+        error: `Dokumen dengan nomor registrasi / kode '${searchKey}' TIDAK DITEMUKAN dalam arsip resmi Pemerintah ${authorityVillageName}.`
       });
     }
 
     const currentStatusRaw = (requestItem.status || '').toLowerCase();
     const currentStatusDisplay = (requestItem.status || 'DIPROSES').toUpperCase();
-    
+
     let validityState: 'VALID' | 'CANCELLED' | 'PENDING' = 'VALID';
     let isVerified = false;
     let message = '';
@@ -491,7 +538,7 @@ const handleDocumentVerification = async (req: Request, res: ExpressResponse) =>
     if (currentStatusRaw.includes('ditolak') || currentStatusRaw.includes('batal') || currentStatusRaw.includes('rejected') || currentStatusRaw.includes('cancel')) {
       validityState = 'CANCELLED';
       isVerified = false;
-      message = 'PERINGATAN: Dokumen ini telah DIBATALKAN / DITOLAK oleh Pemerintah Desa Pulau Betung. Dokumen fisik tidak berlaku lagi untuk keabsahan administrasi.';
+      message = `PERINGATAN: Dokumen ini telah DIBATALKAN / DITOLAK oleh Pemerintah ${authorityVillageName}. Dokumen fisik tidak berlaku lagi untuk keabsahan administrasi.`;
     } else if (currentStatusRaw === 'diajukan' || currentStatusRaw === 'diproses' || currentStatusRaw === 'menunggu') {
       validityState = 'PENDING';
       isVerified = false;
@@ -499,10 +546,10 @@ const handleDocumentVerification = async (req: Request, res: ExpressResponse) =>
     } else {
       validityState = 'VALID';
       isVerified = true;
-      message = 'Dokumen RESMI TERVERIFIKASI SAH dan terdaftar secara elektronik oleh Pemerintah Desa Pulau Betung.';
+      message = `Dokumen RESMI TERVERIFIKASI SAH dan terdaftar secara elektronik oleh Pemerintah ${authorityVillageName}.`;
     }
 
-    const officialNumber = requestItem.officialLetterNumber || `470 / ${requestItem.id.replace('req-', '')} / SK-DESA / PB-PMY / IX / ${new Date().getFullYear()}`;
+    const officialNumber = requestItem.officialLetterNumber || `470 / ${requestItem.id.replace('req-', '')} / SK-DESA / ${authorityPrefix} / IX / ${new Date().getFullYear()}`;
 
     return res.status(200).json({
       success: true,
@@ -520,7 +567,7 @@ const handleDocumentVerification = async (req: Request, res: ExpressResponse) =>
         citizenName: requestItem.citizenName,
         citizenNikMasked: requestItem.citizenNikMasked || maskNik(requestItem.citizenNik || ''),
         completedAt: (requestItem.updatedAt || requestItem.createdAt).toISOString(),
-        authority: 'Pemerintah Desa Pulau Betung, Kecamatan Pemayung, Kabupaten Batang Hari',
+        authority: fullAuthority,
         verificationTimestamp: new Date().toISOString()
       }
     });
@@ -537,6 +584,7 @@ const handleDocumentVerification = async (req: Request, res: ExpressResponse) =>
 
 router.get('/verify-document', handleDocumentVerification);
 router.get('/verify/:identifier', handleDocumentVerification);
+router.get('/v/:slug/verify/:identifier', handleDocumentVerification);
 
 
 // 6. Public Complaints Submission
@@ -568,8 +616,22 @@ router.post('/complaints', async (req: Request, res: ExpressResponse) => {
     }
 
     const prisma = getPrisma();
-    const currentCount = await prisma.complaint.count();
-    const ticketNumber = `ADU-PB-2026-${String(currentCount + 1).padStart(3, '0')}`;
+    const [currentCount, profile] = await Promise.all([
+      prisma.complaint.count(),
+      getVillageProfile().catch(() => null)
+    ]);
+    const activeCtx = getCurrentTenantContext();
+    const shortCode = (
+      profile?.letterCodePrefix?.split('-')[0] ||
+      activeCtx?.letterCodePrefix?.split('-')[0] ||
+      'PB'
+    )
+      .replace(/[^A-Z0-9]/gi, '')
+      .slice(0, 6)
+      .toUpperCase() || 'PB';
+    const yearNow = new Date().getFullYear();
+    const ticketNumber = `ADU-${shortCode}-${yearNow}-${String(currentCount + 1).padStart(3, '0')}`;
+    const villageLabel = profile?.villageName || activeCtx?.tenantName || 'Pemerintah Desa';
 
     const newComplaint = await prisma.complaint.create({
       data: {
@@ -582,7 +644,7 @@ router.post('/complaints', async (req: Request, res: ExpressResponse) => {
         reporterContact: isAnonymous ? null : (reporterContact || ''),
         location: location.trim(),
         status: 'diterima',
-        adminResponse: 'Laporan telah diterima di sistem pengaduan terpadu Desa Pulau Betung dan segera diteruskan ke penanggung jawab terkait.',
+        adminResponse: `Laporan telah diterima di sistem pengaduan terpadu ${villageLabel} dan segera diteruskan ke penanggung jawab terkait.`,
         fotoBuktiPenyelesaian: null
       }
     });
@@ -981,7 +1043,7 @@ router.post('/contact', async (req: Request, res: ExpressResponse) => {
 
     return res.status(201).json({
       success: true,
-      message: 'Pesan Anda berhasil terkirim ke Sekretariat Desa Pulau Betung.',
+      message: `Pesan Anda berhasil terkirim ke Sekretariat ${getCurrentTenantContext()?.tenantName || 'Desa'}.`,
       data: { id: newLog.id }
     });
   } catch (error: any) {

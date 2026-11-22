@@ -244,8 +244,8 @@ ATURAN MENJAWAB:
             const { trackingCode } = call.args as any;
             const prisma = getPrisma();
             
-            // Cari data surat di tabel ServiceRequest berdasarkan trackingCode
-            const requestItem = await prisma.serviceRequest.findUnique({
+            // Cari data surat di tabel ServiceRequest berdasarkan trackingCode (scoped ke tenant aktif)
+            const requestItem = await prisma.serviceRequest.findFirst({
               where: { trackingCode: trackingCode.trim().toUpperCase() }
             });
 

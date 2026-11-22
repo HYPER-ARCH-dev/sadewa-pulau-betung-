@@ -14,10 +14,15 @@ import { authenticateToken, requireRoles, AuthenticatedRequest } from '../auth';
 import {
   STORAGE_PATHS,
   STORAGE_MODULES,
-  resolveStorageTarget,
+  resolveTenantStorageTarget,
+  resolveLegacyCompatibleStorageCandidates,
   isAllowedPrivateSubfolder,
   getStorageArchitectureSummary
 } from '../config/storageRegistry';
+import { getCurrentTenantContext, isMultiTenantRoutingEnabled } from '../db/tenantContext';
+import { getControlPlanePrisma } from '../db/prisma-helpers';
+import { decryptTenantSecret } from '../security/credentialVault';
+import { sanitizeDiagnosticMessage } from '../db/connection-diagnostic';
 
 const router = Router();
 
@@ -142,20 +147,75 @@ function validateMagicBytes(buffer: Buffer, mimeType: string): boolean {
   return false;
 }
 
+export interface ResolvedSupabaseStorageCredentials {
+  supabaseUrl: string;
+  serviceKey: string;
+  bucketName: string;
+  isDedicatedBucket: boolean;
+}
+
+/**
+ * Menyelesaikan kredensial Supabase Storage secara dinamis:
+ * - Mode DEDICATED (jika desa memiliki Supabase Project & Service Key sendiri): dekripsi in-memory dari vault terenkripsi.
+ * - Mode SHARED / Legacy: gunakan project & bucket terpusat platform dengan isolasi prefix `tenants/<tenantId>/`.
+ */
+export async function resolveActiveSupabaseStorageCredentials(): Promise<ResolvedSupabaseStorageCredentials | null> {
+  const ctx = getCurrentTenantContext();
+  if (ctx?.tenantId && ctx.tenancyMode === 'DEDICATED') {
+    try {
+      const dbConfig = await (getControlPlanePrisma() as any).tenantDatabaseConfig.findUnique({
+        where: { tenantId: ctx.tenantId },
+        select: {
+          encryptedSupabaseUrl: true,
+          encryptedServiceKey: true,
+          storageBucket: true
+        }
+      });
+
+      if (dbConfig?.encryptedSupabaseUrl && dbConfig?.encryptedServiceKey) {
+        const supabaseUrl = decryptTenantSecret(dbConfig.encryptedSupabaseUrl, { tenantId: ctx.tenantId });
+        const serviceKey = decryptTenantSecret(dbConfig.encryptedServiceKey, { tenantId: ctx.tenantId });
+        const bucketName = dbConfig.storageBucket?.trim() || STORAGE_PATHS.SUPABASE_BUCKET;
+        return {
+          supabaseUrl,
+          serviceKey,
+          bucketName,
+          isDedicatedBucket: true
+        };
+      }
+    } catch (err: any) {
+      console.warn('⚠️ [Upload] Gagal mendekripsi kredensial Dedicated Storage:', sanitizeDiagnosticMessage(err?.message || String(err)));
+    }
+  }
+
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
+  if (!supabaseUrl || !serviceKey) return null;
+
+  return {
+    supabaseUrl,
+    serviceKey,
+    bucketName: STORAGE_PATHS.SUPABASE_BUCKET,
+    isDedicatedBucket: false
+  };
+}
+
 /**
  * Helper untuk membuat Signed URL terproteksi (TTL 15 menit / 900 detik)
  */
 export async function generateSignedUrl(relativeOrCloudPath: string, expiresInSeconds: number = 900): Promise<string | null> {
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
-  const bucketName = STORAGE_PATHS.SUPABASE_BUCKET;
+  const storageCreds = await resolveActiveSupabaseStorageCredentials();
+  if (!storageCreds) return null;
 
-  if (!supabaseUrl || !supabaseKey) return null;
+  const { supabaseUrl, serviceKey: supabaseKey, bucketName } = storageCreds;
 
   try {
     const cleanUrl = supabaseUrl.replace(/\/$/, '');
     const normalized = relativeOrCloudPath.replace(/^\/+/, '');
-    const uploadPath = normalized.startsWith('private/') ? normalized : `private/${normalized}`;
+    const uploadPath =
+      normalized.startsWith('tenants/') || normalized.startsWith('private/')
+        ? normalized
+        : `private/${normalized}`;
     const targetUrl = `${cleanUrl}/storage/v1/object/sign/${bucketName}/${uploadPath}`;
 
     const response = await fetch(targetUrl, {
@@ -188,13 +248,12 @@ async function uploadToCloudStorage(
   isPrivate: boolean,
   localFallbackPrivateUrl: string
 ): Promise<{ publicCdnUrl?: string; signedUrl?: string } | null> {
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
-  const bucketName = STORAGE_PATHS.SUPABASE_BUCKET;
-
-  if (!supabaseUrl || !supabaseKey) {
+  const storageCreds = await resolveActiveSupabaseStorageCredentials();
+  if (!storageCreds) {
     return null;
   }
+
+  const { supabaseUrl, serviceKey: supabaseKey, bucketName } = storageCreds;
 
   try {
     const cleanUrl = supabaseUrl.replace(/\/$/, '');
@@ -230,23 +289,36 @@ async function uploadToCloudStorage(
 }
 
 /**
- * Helper untuk menghapus seluruh objek (termasuk subfolder per modul) di bucket Supabase Storage
+ * Helper untuk menghapus seluruh objek (termasuk subfolder per modul) di bucket Supabase Storage.
+ * Pada mode multi-tenant, penghapusan wajib dibatasi ke prefix `tenants/<tenantId>/...` dan ditolak jika dipanggil global.
  */
-export async function clearSupabaseStorageBucket(): Promise<boolean> {
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
-  const bucketName = STORAGE_PATHS.SUPABASE_BUCKET;
+export async function clearSupabaseStorageBucket(tenantPrefix?: string): Promise<boolean> {
+  const cleanExplicitPrefix = tenantPrefix ? tenantPrefix.replace(/^\/+|\/+$/g, '') : '';
+  let effectivePrefix: string | null = cleanExplicitPrefix || null;
 
-  if (!supabaseUrl || !supabaseKey) {
+  if (!effectivePrefix) {
+    const { assertSafeUnscopedMutation } = await import('../db/tenantContext');
+    const scope = assertSafeUnscopedMutation('clearSupabaseStorageBucket');
+    if (scope.tenantId) {
+      effectivePrefix = `tenants/${scope.tenantId}`;
+    }
+  }
+
+  const storageCreds = await resolveActiveSupabaseStorageCredentials();
+  if (!storageCreds) {
     console.warn('⚠️ Supabase credentials tidak ditemukan. Melewati pembersihan storage bucket.');
     return false;
   }
+  const { supabaseUrl, serviceKey: supabaseKey, bucketName } = storageCreds;
 
-  const prefixes = [
+  const basePrefixes = [
     'public',
     'private',
     ...Object.values(STORAGE_MODULES).map((m) => `${m.visibility}/${m.subfolder}`)
   ];
+  const prefixes = effectivePrefix
+    ? basePrefixes.map((p) => `${effectivePrefix}/${p}`)
+    : basePrefixes;
 
   try {
     const cleanUrl = supabaseUrl.replace(/\/$/, '');
@@ -330,19 +402,25 @@ const handleUploadRequest = async (req: Request, res: Response) => {
       const safeHash = crypto.randomBytes(12).toString('hex');
       const provisionalName = `file-${Date.now()}-${safeHash}${extension}`;
 
-      const target = resolveStorageTarget({
+      const activeCtx = getCurrentTenantContext();
+      const useTenantPrefix = isMultiTenantRoutingEnabled() && Boolean(activeCtx?.tenantId);
+      const target = resolveTenantStorageTarget({
         moduleKey: requestedModule,
         fieldName,
         reqPath: req.path,
-        fileName: provisionalName
+        fileName: provisionalName,
+        tenantId: activeCtx?.tenantId,
+        useTenantPrefix
       });
 
       const safeFileName = `${target.isPrivate ? 'private' : 'upload'}-${Date.now()}-${safeHash}${extension}`;
-      const finalTarget = resolveStorageTarget({
+      const finalTarget = resolveTenantStorageTarget({
         moduleKey: target.moduleKey,
         fieldName,
         reqPath: req.path,
-        fileName: safeFileName
+        fileName: safeFileName,
+        tenantId: activeCtx?.tenantId,
+        useTenantPrefix
       });
 
       const cloudResult = await uploadToCloudStorage(
@@ -417,18 +495,24 @@ const handleUploadRequest = async (req: Request, res: Response) => {
     }
 
     const safeHash = crypto.randomBytes(12).toString('hex');
-    const initialTarget = resolveStorageTarget({
+    const activeCtx = getCurrentTenantContext();
+    const useTenantPrefix = isMultiTenantRoutingEnabled() && Boolean(activeCtx?.tenantId);
+    const initialTarget = resolveTenantStorageTarget({
       moduleKey: requestedModule,
       fieldName,
       reqPath: req.path,
-      fileName: `tmp-${safeHash}${extension}`
+      fileName: `tmp-${safeHash}${extension}`,
+      tenantId: activeCtx?.tenantId,
+      useTenantPrefix
     });
     const safeFileName = `${initialTarget.isPrivate ? 'private' : 'upload'}-${Date.now()}-${safeHash}${extension}`;
-    const finalTarget = resolveStorageTarget({
+    const finalTarget = resolveTenantStorageTarget({
       moduleKey: initialTarget.moduleKey,
       fieldName,
       reqPath: req.path,
-      fileName: safeFileName
+      fileName: safeFileName,
+      tenantId: activeCtx?.tenantId,
+      useTenantPrefix
     });
 
     const cloudResult = await uploadToCloudStorage(
@@ -496,36 +580,72 @@ router.get('/registry', authenticateToken, requireRoles('super_admin', 'admin_de
  * Mendukung baik format baru (/api/upload/private/:subfolder/:filename)
  * maupun format lama (/api/upload/private/:filename).
  */
-const handleServePrivateFile = (req: AuthenticatedRequest, res: Response) => {
-  const { subfolder, filename } = req.params;
+const handleServePrivateFile = async (req: AuthenticatedRequest, res: Response) => {
+  const { subfolder, filename, tenantId: paramTenantId } = req.params as Record<string, string>;
   const safeFile = path.basename(filename || '');
 
   if (!safeFile || safeFile !== filename || filename.includes('..')) {
     return res.status(400).json({ success: false, error: 'Nama berkas tidak valid.' });
   }
 
-  let resolvedPath = '';
+  const activeCtx = getCurrentTenantContext();
+  const activeTenantId = activeCtx?.tenantId || null;
+
+  // Enforce strict tenant isolation for private file downloads
+  if (activeTenantId && req.user?.tenantId && req.user.tenantId !== activeTenantId) {
+    return res.status(403).json({ success: false, error: 'Akses lintas-tenant untuk dokumen privat ditolak.' });
+  }
+  if (paramTenantId && activeTenantId && paramTenantId !== activeTenantId) {
+    return res.status(403).json({ success: false, error: 'Dokumen privat bukan milik portal desa ini.' });
+  }
+
+  let baseRelativePath = safeFile;
   if (subfolder) {
     const safeSub = path.basename(subfolder);
     if (safeSub !== subfolder || !isAllowedPrivateSubfolder(safeSub)) {
       return res.status(403).json({ success: false, error: 'Subfolder privat tidak valid.' });
     }
-    resolvedPath = path.resolve(PRIVATE_UPLOAD_DIR, safeSub, safeFile);
-  } else {
-    resolvedPath = path.resolve(PRIVATE_UPLOAD_DIR, safeFile);
+    baseRelativePath = `${safeSub}/${safeFile}`;
   }
 
   const baseResolved = path.resolve(PRIVATE_UPLOAD_DIR);
-  if (!resolvedPath.startsWith(baseResolved + path.sep)) {
-    return res.status(403).json({ success: false, error: 'Akses direktori ditolak.' });
+  const rawCandidates = resolveLegacyCompatibleStorageCandidates(
+    paramTenantId ? `tenants/${paramTenantId}/${baseRelativePath}` : baseRelativePath,
+    activeTenantId
+  );
+  const candidates =
+    activeTenantId && activeTenantId !== 'tenant_pulau_betung'
+      ? rawCandidates.filter((c) => c.startsWith(`tenants/${activeTenantId}/`))
+      : rawCandidates;
+
+  for (const relCandidate of candidates) {
+    const candidateAbs = path.resolve(PRIVATE_UPLOAD_DIR, relCandidate);
+    if (!candidateAbs.startsWith(baseResolved + path.sep)) {
+      return res.status(403).json({ success: false, error: 'Akses direktori ditolak.' });
+    }
+    if (fs.existsSync(candidateAbs)) {
+      return res.sendFile(candidateAbs);
+    }
   }
 
-  if (!fs.existsSync(resolvedPath)) {
-    return res.status(404).json({ success: false, error: 'Dokumen tidak ditemukan.' });
+  // Fallback Cloud Storage Signed URL jika berkas hanya ada di bucket cloud
+  const cloudLookupPath = activeTenantId
+    ? `tenants/${activeTenantId}/private/${baseRelativePath}`
+    : `private/${baseRelativePath}`;
+  const signedUrl = await generateSignedUrl(cloudLookupPath, 900);
+  if (signedUrl) {
+    return res.redirect(302, signedUrl);
   }
 
-  return res.sendFile(resolvedPath);
+  return res.status(404).json({ success: false, error: 'Dokumen tidak ditemukan.' });
 };
+
+router.get(
+  '/private/tenants/:tenantId/:subfolder/:filename',
+  authenticateToken,
+  requireRoles('super_admin', 'admin_desa', 'operator'),
+  handleServePrivateFile
+);
 
 router.get(
   '/private/:subfolder/:filename',

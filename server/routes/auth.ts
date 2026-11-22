@@ -10,7 +10,14 @@
 // ============================================================================
 
 import { Router, Request, Response } from 'express';
-import { getPrisma, getUserById, isDatabaseAvailableCached, recordAuditLogDb } from '../db/prisma-helpers';
+import {
+  getPrisma,
+  getUserById,
+  isDatabaseAvailableCached,
+  isJsonFallbackAllowed,
+  recordAuditLogDb
+} from '../db/prisma-helpers';
+import { getCurrentTenantContext } from '../db/tenantContext';
 import { sanitizeDiagnosticMessage } from '../db/connection-diagnostic';
 import { verifyPassword, createToken, hashPassword, generateSalt, authenticateToken, AuthenticatedRequest } from '../auth';
 
@@ -22,6 +29,7 @@ const router = Router();
 router.post('/login', async (req: Request, res: Response) => {
   try {
     const { username, password } = req.body;
+    const activeCtx = getCurrentTenantContext();
 
     // Validasi input: username dan password tidak boleh kosong
     if (!username || !password) {
@@ -29,6 +37,13 @@ router.post('/login', async (req: Request, res: Response) => {
     }
 
     if (!(await isDatabaseAvailableCached())) {
+      if (!isJsonFallbackAllowed()) {
+        return res.status(503).json({
+          success: false,
+          error: 'Koneksi database portal desa sedang tidak tersedia. Mode offline dinonaktifkan pada arsitektur multi-tenant.'
+        });
+      }
+
       const { getDb, saveDb } = await import('../db/database');
       const db = getDb();
       const identifier = String(username).trim().toLowerCase();
@@ -58,6 +73,9 @@ router.post('/login', async (req: Request, res: Response) => {
         message: `Selamat datang kembali, ${user.name}`,
         token,
         mustChangePassword: false,
+        tenant: activeCtx?.tenantId
+          ? { id: activeCtx.tenantId, slug: activeCtx.slug, name: activeCtx.tenantName }
+          : null,
         user: {
           id: user.id,
           name: user.name,
@@ -72,44 +90,45 @@ router.post('/login', async (req: Request, res: Response) => {
     const prisma = getPrisma();
     const identifier = String(username).trim();
 
-    // Cari user di database berdasarkan username ATAU email.
-    // Menggunakan mode 'insensitive' agar tidak sensitif huruf besar/kecil (misal Admin / admin sama saja).
+    // Cari user di database berdasarkan username ATAU email (sudah dibatasi ke tenant aktif oleh Prisma $extends).
     const user = await prisma.user.findFirst({
       where: {
         OR: [
           { username: { equals: identifier, mode: 'insensitive' } },
           { email: { equals: identifier, mode: 'insensitive' } }
         ],
-        isActive: true, // Hanya izinkan akun yang berstatus aktif
-      },
+        isActive: true
+      }
     });
 
     if (!user) {
       return res.status(401).json({ success: false, error: 'Kredensial tidak valid. Pengguna tidak ditemukan.' });
     }
 
+    // Verifikasi ganda di level aplikasi: pastikan user.villageId tidak berasal dari desa lain
+    if (activeCtx?.tenantId && user.villageId && user.villageId !== activeCtx.tenantId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Akun ini terdaftar pada portal desa lain dan tidak memiliki akses ke portal ini.'
+      });
+    }
+
     // --- PROTEKSI SERANGAN BRUTE-FORCE (PENEBAKAN KATA SANDI) ---
-    // Cek apakah akun sedang dalam masa penguncian (lockout)
     if (user.lockoutUntil) {
       const lockoutTime = new Date(user.lockoutUntil).getTime();
       const now = Date.now();
-      
-      // Jika waktu sekarang masih di bawah waktu selesai kunci
       if (now < lockoutTime) {
         const remainingMinutes = Math.ceil((lockoutTime - now) / (1000 * 60));
-        return res.status(403).json({ 
-          success: false, 
-          error: `Akun terkunci sementara demi keamanan karena terlalu banyak percobaan masuk yang gagal. Silakan coba kembali dalam ${remainingMinutes} menit.` 
+        return res.status(403).json({
+          success: false,
+          error: `Akun terkunci sementara demi keamanan karena terlalu banyak percobaan masuk yang gagal. Silakan coba kembali dalam ${remainingMinutes} menit.`
         });
       }
     }
 
-    // Periksa keaslian kata sandi menggunakan fungsi hash salted scrypt
     const isValid = verifyPassword(password, user.passwordHash, user.salt);
-    
+
     if (!isValid) {
-      // --- PENANGANAN JIKA KATA SANDI SALAH ---
-      // Tambah 1 ke counter gagal login secara atomic
       const updatedUser = await prisma.user.update({
         where: { id: user.id },
         data: { failedLoginCount: { increment: 1 } },
@@ -117,57 +136,55 @@ router.post('/login', async (req: Request, res: Response) => {
       });
 
       const failedCount = updatedUser.failedLoginCount;
-      const isLockout = failedCount >= 5; // Batas toleransi maksimal 5 kali gagal
-      
+      const isLockout = failedCount >= 5;
+
       if (isLockout) {
-        // Kunci akun selama 15 menit ke depan
         const lockoutDate = new Date(Date.now() + 15 * 60 * 1000);
         await prisma.user.update({
           where: { id: user.id },
           data: { lockoutUntil: lockoutDate }
         });
-        
-        // Catat ke log audit keamanan desa
+
         recordAuditLogDb(
-          user.id, user.name, user.role,
-          'Blokir Login', 'Keamanan',
+          user.id,
+          user.name,
+          user.role,
+          'Blokir Login',
+          'Keamanan',
           `Akun ${user.username} terkunci otomatis selama 15 menit akibat 5x gagal memasukkan kata sandi.`,
           req.ip || '127.0.0.1'
         );
 
-        return res.status(403).json({ 
-          success: false, 
-          error: 'Terlalu banyak percobaan gagal. Akun Anda dikunci selama 15 menit demi keamanan data desa.' 
+        return res.status(403).json({
+          success: false,
+          error: 'Terlalu banyak percobaan gagal. Akun Anda dikunci selama 15 menit demi keamanan data desa.'
         });
       }
 
-      return res.status(401).json({ 
-        success: false, 
-        error: `Kata sandi salah. Percobaan ke-${failedCount} dari 5. Jika gagal 5 kali, akun akan dikunci.` 
+      return res.status(401).json({
+        success: false,
+        error: `Kata sandi salah. Percobaan ke-${failedCount} dari 5. Jika gagal 5 kali, akun akan dikunci.`
       });
     }
 
-    // --- JIKA LOGIN BERHASIL ---
-    // 1. Reset hitungan gagal login ke 0
-    // 2. Buka kunci akun jika sebelumnya pernah terkunci
-    // 3. Catat waktu terakhir login
     const nowIso = new Date();
     await prisma.user.update({
       where: { id: user.id },
       data: {
         failedLoginCount: 0,
         lockoutUntil: null,
-        lastLogin: nowIso,
-      },
+        lastLogin: nowIso
+      }
     });
 
-    // Buat token sesi HMAC-SHA256 untuk dipakai request selanjutnya di frontend
     const token = createToken(user as any);
 
-    // Catat log aktivitas masuk ke sistem
     recordAuditLogDb(
-      user.id, user.name, user.role,
-      'Login Sistem', 'Autentikasi',
+      user.id,
+      user.name,
+      user.role,
+      'Login Sistem',
+      'Autentikasi',
       `Petugas ${user.name} (${user.roleTitle}) berhasil masuk ke dashboard admin.`,
       req.ip || '127.0.0.1'
     );
@@ -176,7 +193,10 @@ router.post('/login', async (req: Request, res: Response) => {
       success: true,
       message: `Selamat datang kembali, ${user.name}`,
       token,
-      mustChangePassword: user.mustChangePassword, // Memberi tahu frontend jika ini akun baru dan perlu ganti password
+      mustChangePassword: user.mustChangePassword,
+      tenant: activeCtx?.tenantId
+        ? { id: activeCtx.tenantId, slug: activeCtx.slug, name: activeCtx.tenantName }
+        : null,
       user: {
         id: user.id,
         name: user.name,
@@ -188,6 +208,7 @@ router.post('/login', async (req: Request, res: Response) => {
         officialId: user.officialId,
         permissions: user.permissions,
         mustChangePassword: user.mustChangePassword,
+        villageId: user.villageId || activeCtx?.tenantId || null,
         lastLogin: nowIso.toISOString()
       }
     });
@@ -200,7 +221,6 @@ router.post('/login', async (req: Request, res: Response) => {
 // ============================================================================
 // 👤 2. ENDPOINT PROFIL PENGGUNA AKTIF (/api/auth/me)
 // ============================================================================
-// Mengembalikan identitas petugas yang sedang login berdasarkan token Bearer
 router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
     if (!req.user?.userId) {
@@ -212,8 +232,12 @@ router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Resp
       return res.status(404).json({ success: false, error: 'Pengguna tidak ditemukan.' });
     }
 
+    const activeCtx = getCurrentTenantContext();
     return res.json({
       success: true,
+      tenant: activeCtx?.tenantId
+        ? { id: activeCtx.tenantId, slug: activeCtx.slug, name: activeCtx.tenantName }
+        : null,
       user: {
         id: user.id,
         name: user.name,
@@ -225,7 +249,8 @@ router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Resp
         officialId: user.officialId,
         permissions: user.permissions,
         mustChangePassword: user.mustChangePassword,
-        lastLogin: user.lastLogin ? user.lastLogin.toISOString() : null,
+        villageId: user.villageId || activeCtx?.tenantId || null,
+        lastLogin: user.lastLogin ? user.lastLogin.toISOString() : null
       }
     });
   } catch (error: any) {

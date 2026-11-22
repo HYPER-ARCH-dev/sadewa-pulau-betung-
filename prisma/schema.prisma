@@ -11,34 +11,158 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+// ============================================================================
+// 0. CONTROL PLANE MULTI-TENANT SAAS (PHASE 1 ADDITIVE SCHEMA)
+// ============================================================================
+enum TenancyMode {
+  SHARED
+  DEDICATED
+}
+
+enum TenantStatus {
+  PROVISIONING
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum DomainVerificationStatus {
+  PENDING_VERIFICATION
+  VERIFIED
+  FAILED
+}
+
+model Tenant {
+  id               String                @id @default(cuid())
+  slug             String                @unique
+  name             String
+  letterCodePrefix String                @default("DESA")
+  tenancyMode      TenancyMode           @default(SHARED)
+  status           TenantStatus          @default(ACTIVE)
+  primaryDomain    String?
+  domains          TenantDomain[]
+  dbConfig         TenantDatabaseConfig?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+}
+
+model TenantDomain {
+  id                 String                   @id @default(cuid())
+  tenantId           String
+  tenant             Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  domain             String                   @unique
+  isCustom           Boolean                  @default(false)
+  isPrimary          Boolean                  @default(false)
+  verificationStatus DomainVerificationStatus @default(PENDING_VERIFICATION)
+  verificationToken  String?
+  sslStatus          String                   @default("PENDING") // PENDING | ACTIVE | ERROR
+  verifiedAt         DateTime?
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+
+  @@index([tenantId])
+}
+
+model TenantDatabaseConfig {
+  id                   String    @id @default(cuid())
+  tenantId             String    @unique
+  tenant               Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  encryptedDatabaseUrl String    @db.Text
+  encryptedDirectUrl   String?   @db.Text
+  encryptedSupabaseUrl String?   @db.Text
+  encryptedServiceKey  String?   @db.Text
+  storageBucket        String?
+  keyVersion           Int       @default(1)
+  credentialVersion    Int       @default(1)
+  lastProbeAt          DateTime?
+  lastProbeStatus      String?   // HEALTHY | UNREACHABLE
+  rotatedAt            DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+}
+
+model PlatformUser {
+  id                 String    @id @default(cuid())
+  name               String
+  username           String    @unique
+  email              String    @unique
+  passwordHash       String
+  salt               String
+  role               String    @default("platform_super_admin") // platform_super_admin | platform_ops
+  isActive           Boolean   @default(true)
+  mustChangePassword Boolean   @default(true)
+  tokenVersion       Int       @default(1)
+  failedLoginCount   Int       @default(0)
+  lockoutUntil       DateTime?
+  lastLogin          DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+}
+
+model PlatformAuditLog {
+  id               String   @id @default(cuid())
+  platformUserId   String
+  platformUserName String
+  platformUserRole String
+  targetTenantId   String?
+  action           String
+  module           String
+  details          String   @db.Text
+  ipAddress        String   @default("127.0.0.1")
+  level            String   @default("info")
+  timestamp        DateTime @default(now())
+
+  @@index([targetTenantId, timestamp])
+}
+
+model LetterSequenceCounter {
+  id                 String   @id @default(cuid())
+  villageId          String
+  classificationCode String
+  year               Int
+  month              Int
+  lastSequence       Int      @default(0)
+  updatedAt          DateTime @updatedAt
+
+  @@unique([villageId, classificationCode, year, month])
+  @@index([villageId])
+}
+
 // 1. MANAJEMEN PENGGUNA & AUTENTIKASI
 model User {
-  id           String    @id @default(cuid())
-  name         String
-  username     String    @unique
-  email        String    @unique
-  passwordHash String
-  salt         String
-  role         String    // super_admin | admin_desa | operator | editor
-  roleTitle    String
-  phone        String?
-  gender       String?   // Laki-laki | Perempuan
-  birthDate    String?
-  isActive            Boolean   @default(true)
-  mustChangePassword  Boolean   @default(true)
-  tokenVersion        Int       @default(1)
-  lastLogin           DateTime?
-  failedLoginCount Int       @default(0)
-  lockoutUntil     DateTime?
-  officialId       String?   @unique
-  permissions      Json?     // Custom module permissions: String[]
-  createdAt        DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  id                 String    @id @default(cuid())
+  villageId          String?
+  name               String
+  username           String    @unique
+  email              String    @unique
+  passwordHash       String
+  salt               String
+  role               String    // super_admin | admin_desa | operator | editor
+  roleTitle          String
+  phone              String?
+  gender             String?   // Laki-laki | Perempuan
+  birthDate          String?
+  isActive           Boolean   @default(true)
+  mustChangePassword Boolean   @default(true)
+  tokenVersion       Int       @default(1)
+  lastLogin          DateTime?
+  failedLoginCount   Int       @default(0)
+  lockoutUntil       DateTime?
+  officialId         String?   @unique
+  permissions        Json?     // Custom module permissions: String[]
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@unique([villageId, username])
+  @@unique([villageId, email])
+  @@unique([villageId, officialId])
+  @@index([villageId])
 }
 
 // 2. PROFIL DESA & KONFIGURASI KOP SURAT / IDENTITAS
 model VillageProfile {
   id                   String   @id @default("default")
+  villageId            String?
   villageName          String
   district             String
   regency              String
@@ -79,11 +203,14 @@ model VillageProfile {
   emergencyContacts    Json?    // [{ title, phone, desc }]
   lastUpdated          DateTime @default(now()) @updatedAt
   updatedBy            String?
+
+  @@index([villageId])
 }
 
 // 3. STRUKTUR WILAYAH DUSUN / RW / RT
 model Dusun {
   id         String     @id @default(cuid())
+  villageId  String?
   number     Int?
   customName String?
   name       String     // e.g. "Dusun 1 Betung Indah"
@@ -93,10 +220,13 @@ model Dusun {
   residents  Resident[]
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @updatedAt
+
+  @@index([villageId])
 }
 
 model RW {
   id         String     @id @default(cuid())
+  villageId  String?
   name       String     // e.g. "RW 01"
   dusunId    String
   dusun      Dusun      @relation(fields: [dusunId], references: [id], onDelete: Restrict)
@@ -106,10 +236,13 @@ model RW {
   residents  Resident[]
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @updatedAt
+
+  @@index([villageId])
 }
 
 model RT {
   id         String     @id @default(cuid())
+  villageId  String?
   name       String     // e.g. "RT 01"
   rwId       String
   rw         RW         @relation(fields: [rwId], references: [id], onDelete: Restrict)
@@ -119,11 +252,14 @@ model RT {
   residents  Resident[]
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @updatedAt
+
+  @@index([villageId])
 }
 
 // 4. PELAYANAN SURAT & ADMINISTRASI WARGA
 model VillageService {
   id             String   @id @default(cuid())
+  villageId      String?
   name           String
   category       String   // kependudukan | pertanahan | sosial | usaha | umum | CLASS_A | CLASS_B
   letterClass    String?  // CLASS_A | CLASS_B
@@ -140,10 +276,13 @@ model VillageService {
   requiredFields Json     // Field configs array
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+
+  @@index([villageId])
 }
 
 model ServiceRequest {
   id                   String   @id @default(cuid())
+  villageId            String?
   trackingCode         String   @unique
   serviceId            String
   serviceName          String
@@ -174,11 +313,15 @@ model ServiceRequest {
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
+  @@unique([villageId, trackingCode])
+  @@unique([villageId, officialLetterNumber])
+  @@index([villageId])
   @@index([status, createdAt, citizenNikMasked])
 }
 
 model DeletedServiceRequest {
   id                  String   @id @default(cuid())
+  villageId           String?
   originalRequestId   String
   trackingCode        String
   serviceId           String
@@ -195,11 +338,14 @@ model DeletedServiceRequest {
   deletionReason      String
   fullRequestSnapshot Json
   createdAt           DateTime @default(now())
+
+  @@index([villageId])
 }
 
 // 5. PENGADUAN & ASPIRASI WARGA
 model Complaint {
   id                    String   @id @default(cuid())
+  villageId             String?
   ticketNumber          String   @unique
   category              String   // infrastruktur | pelayanan_desa | sosial_bantuan | lingkungan | ketertiban | lainnya
   title                 String
@@ -217,6 +363,8 @@ model Complaint {
   fotoBuktiPenyelesaian String?
   catatanTindakLanjut   String?  @db.Text
 
+  @@unique([villageId, ticketNumber])
+  @@index([villageId])
   @@index([status, createdAt])
 }
 
@@ -259,6 +407,7 @@ enum ComplaintStatus {
 
 model Resident {
   id               String            @id @default(cuid())
+  villageId        String?
   nik              String            @unique
   kkNumber         String
   fullName         String
@@ -288,10 +437,14 @@ model Resident {
   bansosRecipients BansosRecipient[]
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
+
+  @@unique([villageId, nik])
+  @@index([villageId])
 }
 
 model BansosRecipient {
   id            String       @id @default(cuid())
+  villageId     String?
   residentId    String
   resident      Resident     @relation(fields: [residentId], references: [id], onDelete: Restrict)
   programName   String       // BLT-DD | PKH | BPNT | BST | Bantuan Beras | Lainnya
@@ -303,11 +456,14 @@ model BansosRecipient {
   notes         String?      @db.Text
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
+
+  @@index([villageId])
 }
 
 // 7. PUBLIKASI: BERITA, PENGUMUMAN & AGENDA
 model NewsItem {
   id          String   @id @default(cuid())
+  villageId   String?
   title       String
   slug        String   @unique
   content     String   @db.Text
@@ -321,10 +477,14 @@ model NewsItem {
   views       Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@unique([villageId, slug])
+  @@index([villageId])
 }
 
 model Announcement {
   id             String   @id @default(cuid())
+  villageId      String?
   title          String
   content        String   @db.Text
   publishedAt    DateTime @default(now())
@@ -335,10 +495,13 @@ model Announcement {
   attachmentName String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+
+  @@index([villageId])
 }
 
 model AgendaItem {
   id          String   @id @default(cuid())
+  villageId   String?
   title       String
   description String   @db.Text
   date        DateTime
@@ -349,10 +512,13 @@ model AgendaItem {
   status      String   @default("akan_datang") // akan_datang | berlangsung | selesai | dibatalkan
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@index([villageId])
 }
 
 model GalleryItem {
   id          String   @id @default(cuid())
+  villageId   String?
   title       String
   description String   @db.Text
   category    String   // kegiatan | pembangunan | tradisi | wisata | gotong_royong
@@ -361,11 +527,14 @@ model GalleryItem {
   date        DateTime @default(now())
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@index([villageId])
 }
 
 // 7. APBDES & TRANSPARANSI ANGGARAN
 model BudgetYearData {
   id                       String   @id @default(cuid())
+  villageId                String?
   year                     Int
   documentType             String   @default("murni") // murni | perubahan
   status                   String   @default("BERLAKU") // DRAFT | DIPROSES | DISAHKAN_BPD | BERLAKU
@@ -388,11 +557,14 @@ model BudgetYearData {
   updatedAt                DateTime @updatedAt
 
   @@unique([year, documentType])
+  @@unique([villageId, year, documentType])
+  @@index([villageId])
 }
 
 // 8. PEMBANGUNAN & INFRASTRUKTUR DESA
 model DevelopmentProject {
   id               String   @id @default(cuid())
+  villageId        String?
   title            String
   location         String
   fiscalYear       Int
@@ -409,11 +581,14 @@ model DevelopmentProject {
   completedImage   String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+
+  @@index([villageId])
 }
 
 // 9. POTENSI DESA & UMKM
 model VillagePotential {
   id               String   @id @default(cuid())
+  villageId        String?
   name             String
   category         String   // pertanian | perkebunan | perikanan | pariwisata | kerajinan | energi
   description      String   @db.Text
@@ -423,10 +598,13 @@ model VillagePotential {
   keyOpportunities Json?    // String[]
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+
+  @@index([villageId])
 }
 
 model UmkmItem {
   id              String   @id @default(cuid())
+  villageId       String?
   name            String
   ownerName       String
   category        String   // kuliner | kerajinan | hasil_tani | jasa | fashion
@@ -441,11 +619,14 @@ model UmkmItem {
   ownerSnapshot   Json?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+
+  @@index([villageId])
 }
 
 // 10. STRUKTUR APARATUR DESA & FASILITAS
 model VillageOfficial {
   id             String   @id @default(cuid())
+  villageId      String?
   name           String
   position       String
   section        String   // kepala_desa | sekretariat | kasi | kaur | kadus | rt_rw | bpd | lpm | karang_taruna | pkk | posyandu | lainnya
@@ -467,10 +648,13 @@ model VillageOfficial {
   allowedModules Json?    // String[]
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+
+  @@index([villageId])
 }
 
 model MapFacility {
   id               String   @id @default(cuid())
+  villageId        String?
   name             String
   category         String   // kantor_desa | pendidikan | kesehatan | ibadah | infrastruktur | ekonomi | wisata | olahraga | lainnya
   address          String
@@ -482,11 +666,14 @@ model MapFacility {
   contact          String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+
+  @@index([villageId])
 }
 
 // 11. WEBGIS & SPASIAL PERTANAHAN (PERSIL TANAH & SPORADIK)
 model LandParcel {
   id                         String   @id @default(cuid())
+  villageId                  String?
   nop                        String   @unique
   ownerName                  String
   ownerNik                   String
@@ -513,11 +700,15 @@ model LandParcel {
   notes                      String?  @db.Text
   createdAt                  DateTime @default(now())
   updatedAt                  DateTime @updatedAt
+
+  @@unique([villageId, nop])
+  @@index([villageId])
 }
 
 // 12. POSYANDU & MONITORING STUNTING (Z-SCORE WHO)
 model ToddlerRecord {
   id                   String               @id @default(cuid())
+  villageId            String?
   nik                  String               @unique
   name                 String
   gender               String               // L | P
@@ -536,10 +727,15 @@ model ToddlerRecord {
   measurements         ToddlerMeasurement[]
   createdAt            DateTime             @default(now())
   updatedAt            DateTime             @updatedAt
+
+  @@unique([villageId, nik])
+  @@unique([villageId, kmsCardNumber])
+  @@index([villageId])
 }
 
 model ToddlerMeasurement {
   id                     String        @id @default(cuid())
+  villageId              String?
   toddlerId              String
   toddler                ToddlerRecord @relation(fields: [toddlerId], references: [id], onDelete: Cascade)
   measurementDate        DateTime
@@ -559,10 +755,13 @@ model ToddlerMeasurement {
   cadreNotes             String?       @db.Text
   measuredBy             String?
   createdAt              DateTime      @default(now())
+
+  @@index([villageId])
 }
 
 model PosyanduSchedule {
   id            String   @id @default(cuid())
+  villageId     String?
   posyanduName  String
   dusunName     String
   location      String
@@ -574,11 +773,14 @@ model PosyanduSchedule {
   notes         String?  @db.Text
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+
+  @@index([villageId])
 }
 
 // 13. AUDIT LOG & PRESENSI APARATUR DESA
 model AuditLog {
   id        String   @id @default(cuid())
+  villageId String?
   userId    String
   userName  String
   userRole  String
@@ -588,10 +790,13 @@ model AuditLog {
   timestamp DateTime @default(now())
   ipAddress String   @default("127.0.0.1")
   level     String   @default("info")
+
+  @@index([villageId])
 }
 
 model AttendanceLog {
   id           String   @id @default(cuid())
+  villageId    String?
   officialId   String
   officialName String
   type         String   // masuk | pulang
@@ -605,4 +810,6 @@ model AttendanceLog {
   gpsCapturedBy      String @default("client")
   deviceIdCapturedBy String @default("client")
   createdAt    DateTime @default(now())
+
+  @@index([villageId])
 }

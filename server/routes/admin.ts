@@ -2,11 +2,25 @@ import { Router, Request, Response as ExpressResponse } from 'express';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { getPrisma, recordAuditLogDb, isDatabaseAvailableCached, getUserById } from '../db/prisma-helpers';
+import {
+  getPrisma,
+  getPrismaForActiveContext,
+  recordAuditLogDb,
+  isDatabaseAvailableCached,
+  isJsonFallbackAllowed,
+  getTenantVillageProfileId,
+  getUserById
+} from '../db/prisma-helpers';
 import { getDb, saveDb, seedInitialData } from '../db/database';
 import { authenticateToken, requireRoles, AuthenticatedRequest, verifyPassword, hashPassword, generateSalt, createToken } from '../auth';
 import { assignServerLetterNumberAtomic } from '../services/letterNumbering';
 import { clearSupabaseStorageBucket } from './upload';
+import {
+  assertSafeUnscopedMutation,
+  getCurrentTenantContext,
+  getScopedDeleteWhere,
+  TenantScopeViolationError
+} from '../db/tenantContext';
 import { SERVER_CONFIG } from '../config/constants';
 import { getStorageArchitectureSummary } from '../config/storageRegistry';
 import { getAdminArchitectureMap } from '../config/adminModuleRegistry';
@@ -23,6 +37,20 @@ function generateServerId(prefix: string): string {
 
 // All routes here require authentication (Keyword: AUTH, RBAC)
 router.use(authenticateToken);
+
+// Blokir fallback JSON lokal jika multi-tenant aktif atau tenant != pulau_betung
+router.use(async (req: AuthenticatedRequest, res: ExpressResponse, next) => {
+  if (req.path === '/storage-map' || req.path === '/panel-map') {
+    return next();
+  }
+  if (!isJsonFallbackAllowed() && !(await isDatabaseAvailableCached())) {
+    return res.status(503).json({
+      success: false,
+      error: 'Database portal desa belum tersedia. Akses penyimpanan lokal dinonaktifkan demi isolasi multi-tenant.'
+    });
+  }
+  return next();
+});
 
 // 1. Dashboard Statistics
 router.get('/stats', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
@@ -115,31 +143,40 @@ export async function recalculateVillageProfileStats(prisma: any) {
     ]);
 
     const totalFamilies = familiesGroup.length;
-
-    await prisma.villageProfile.upsert({
-      where: { id: 'default' },
-      update: {
-        totalPopulation: totalPop,
-        totalFamilies: totalFamilies,
-        lastUpdated: new Date()
-      },
-      create: {
-        id: 'default',
-        villageName: 'Desa Pulau Betung',
-        district: 'Pembarap',
-        regency: 'Kabupaten Merangin',
-        province: 'Jambi',
-        postalCode: '37361',
-        history: 'Sejarah Desa Pulau Betung',
-        vision: 'Mewujudkan Desa Mandiri, Maju, dan Sejahtera',
-        mission: [],
-        areaSqKm: 12.5,
-        borders: {},
-        totalPopulation: totalPop,
-        totalFamilies: totalFamilies,
-        lastUpdated: new Date()
-      }
+    const ctx = getCurrentTenantContext();
+    const existingProfile = await prisma.villageProfile.findFirst({
+      orderBy: { lastUpdated: 'desc' }
     });
+
+    if (existingProfile) {
+      await prisma.villageProfile.update({
+        where: { id: existingProfile.id },
+        data: {
+          totalPopulation: totalPop,
+          totalFamilies: totalFamilies,
+          lastUpdated: new Date()
+        }
+      });
+    } else {
+      await prisma.villageProfile.create({
+        data: {
+          id: getTenantVillageProfileId(),
+          villageName: ctx?.tenantName || 'Desa Pulau Betung',
+          district: 'Pembarap',
+          regency: 'Kabupaten Merangin',
+          province: 'Jambi',
+          postalCode: '37361',
+          history: `Sejarah ${ctx?.tenantName || 'Desa Pulau Betung'}`,
+          vision: 'Mewujudkan Desa Mandiri, Maju, dan Sejahtera',
+          mission: [],
+          areaSqKm: 12.5,
+          borders: {},
+          totalPopulation: totalPop,
+          totalFamilies: totalFamilies,
+          lastUpdated: new Date()
+        }
+      });
+    }
 
     return { totalPop, malePop, femalePop, totalFamilies };
   } catch (err) {
@@ -601,11 +638,12 @@ router.post('/users', requireRoles('super_admin', 'admin_desa'), async (req: Aut
 
     const cleanOfficialId = officialId && String(officialId).trim().length > 0 ? String(officialId).trim() : null;
 
+    const activeCtx = getCurrentTenantContext();
     const newUser = await prisma.user.create({
       data: {
         name: name.trim(),
         username: username.trim(),
-        email: email?.trim() || `${username.trim()}@pulaubetung.sadewa.id`,
+        email: email?.trim() || `${username.trim()}@${activeCtx?.slug || 'pulaubetung'}.sadewa.id`,
         passwordHash,
         salt,
         role: role || 'operator',
@@ -1168,7 +1206,15 @@ router.put('/requests/:id/status', requireRoles('super_admin', 'admin_desa', 'op
   
   try {
     // FIX 10: Pemindahan pembuatan nomor ke dalam prisma.$transaction dengan retry otomatis
+    const activeCtx = getCurrentTenantContext();
     const updated = await prisma.$transaction(async (tx: any) => {
+      if (activeCtx?.tenantId && activeCtx.tenancyMode === 'SHARED' && typeof tx.$executeRawUnsafe === 'function') {
+        await tx.$executeRawUnsafe(
+          `SELECT set_config('app.current_tenant_id', $1, true)`,
+          activeCtx.tenantId
+        );
+      }
+
       // Robust search: match by id or tracking code
       const searchId = (id || '').trim();
       const searchTracking = (trackingCode || fullRequest?.trackingCode || '').trim();
@@ -1201,50 +1247,65 @@ router.put('/requests/:id/status', requireRoles('super_admin', 'admin_desa', 'op
         updateData.letterheadSnapshot = letterheadSnapshot;
       }
 
-      // Logic generate nomor otomatis jika selesai/disetujui dan belum ada nomor
-      if ((status === 'selesai' || status === 'disetujui') && !updateData.officialLetterNumber) {
+      const isFinalizing = status === 'selesai' || status === 'disetujui';
+      const profile = isFinalizing
+        ? await tx.villageProfile.findFirst({ orderBy: { lastUpdated: 'desc' } })
+        : null;
+
+      // Logic generate nomor otomatis & atomik per-desa jika selesai/disetujui dan belum ada nomor
+      if (isFinalizing && !updateData.officialLetterNumber) {
         const serviceName = existing ? existing.serviceName : fullRequest.serviceName;
         const dateStr = updateData.completedAt.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
-        
-        // Helper ini diasumsikan ada atau kita implementasikan inline yang aman
+        const resolvedVillageCode =
+          profile?.letterCodePrefix?.trim() ||
+          activeCtx?.letterCodePrefix?.trim() ||
+          undefined;
+
         updateData.officialLetterNumber = await assignServerLetterNumberAtomic(
           serviceName,
           dateStr,
-          [], // Kita tidak pakai array lokal lagi, biarkan DB handle unique constraint
-          existing ? existing.id : fullRequest.id
+          [],
+          existing ? existing.id : fullRequest.id,
+          {
+            prisma: tx,
+            villageId: activeCtx?.tenantId || existing?.villageId || undefined,
+            villageCode: resolvedVillageCode
+          }
         );
       }
 
       // Capture snapshots if missing
-      if ((status === 'selesai' || status === 'disetujui')) {
+      if (isFinalizing) {
         if (!updateData.letterheadSnapshot && !existing?.letterheadSnapshot) {
-          const profile = await tx.villageProfile.findUnique({ where: { id: 'default' } });
           const activeKades = await tx.villageOfficial.findFirst({
             where: { section: 'kepala_desa', isActive: true }
           }) || await tx.villageOfficial.findFirst({ where: { section: 'kepala_desa' } });
 
+          const fallbackTenantName = activeCtx?.tenantName || 'Desa Pulau Betung';
+          const fallbackDomain = activeCtx?.slug ? `${activeCtx.slug}.sadewa.id` : 'pulau-betung.desa.id';
+
           updateData.letterheadSnapshot = {
-            villageName: profile?.villageName || 'Desa Pulau Betung',
-            district: profile?.district || 'Kecamatan Pemayung',
-            regency: profile?.regency || 'Kabupaten Batang Hari',
-            province: profile?.province || 'Provinsi Jambi',
-            postalCode: profile?.postalCode || '36657',
-            addressStreet: profile?.addressStreet || 'Jalan Lintas Jambi - Muara Bulian KM. 32, Desa Pulau Betung',
-            email: profile?.email || 'kontak@pulaubetung.desa.id',
-            phone: profile?.phone || '0812-7489-0001',
-            domain: profile?.website || 'pulau-betung.desa.id',
+            villageName: profile?.villageName || fallbackTenantName,
+            district: profile?.district || '-',
+            regency: profile?.regency || '-',
+            province: profile?.province || '-',
+            postalCode: profile?.postalCode || '-',
+            addressStreet: profile?.addressStreet || `Kantor ${fallbackTenantName}`,
+            email: profile?.email || `pemdes@${activeCtx?.slug || 'desa'}.sadewa.id`,
+            phone: profile?.phone || '-',
+            domain: profile?.website || fallbackDomain,
             villageLogoUrl: profile?.villageLogoUrl || '',
             regencyLogoUrl: profile?.regencyLogoUrl || '',
             officialSignatureUrl: profile?.officialSignatureUrl || '',
-            kadesName: profile?.kadesName || (activeKades ? activeKades.name : 'H. Sudirman'),
-            kadesNip: profile?.kadesNip || activeKades?.nip || 'NIAP. 19780412 201201 1 004',
+            kadesName: profile?.kadesName || (activeKades ? activeKades.name : 'Kepala Desa'),
+            kadesNip: profile?.kadesNip || activeKades?.nip || '-',
             capturedAt: new Date().toISOString()
           };
         }
 
         const citizenNik = existing ? existing.citizenNik : fullRequest.citizenNik;
         if (citizenNik && !existing?.citizenSnapshot) {
-          const resident = await tx.resident.findUnique({ where: { nik: citizenNik } });
+          const resident = await tx.resident.findFirst({ where: { nik: citizenNik } });
           if (resident) {
             updateData.citizenSnapshot = {
               nik: resident.nik,
@@ -1598,8 +1659,9 @@ router.post('/requests/deleted/clear-all', requireRoles('super_admin'), async (r
       });
     }
 
-    const prisma = getPrisma();
-    const { count } = await prisma.deletedServiceRequest.deleteMany({});
+    const scopedWhere = getScopedDeleteWhere({}, 'POST /api/admin/requests/deleted/clear-all');
+    const prisma = await getPrismaForActiveContext();
+    const { count } = await prisma.deletedServiceRequest.deleteMany({ where: scopedWhere });
 
     await recordAuditLogDb(
       req.user!.userId,
@@ -1615,7 +1677,10 @@ router.post('/requests/deleted/clear-all', requireRoles('super_admin'), async (r
       success: true,
       message: `Seluruh catatan log sampah (${count} berkas) berhasil dikosongkan.`
     });
-  } catch (error) {
+  } catch (error: any) {
+    if (error instanceof TenantScopeViolationError) {
+      return res.status(403).json({ success: false, error: error.message });
+    }
     return res.status(500).json({ success: false, error: 'Gagal mengosongkan log.' });
   }
 });
@@ -2605,48 +2670,41 @@ router.put('/budget', requireRoles('super_admin', 'admin_desa'), async (req: Aut
     }
 
     const docType = payload.documentType || 'murni';
-    const saved = await getPrisma().budgetYearData.upsert({
-      where: { year_documentType: { year, documentType: docType } },
-      update: {
-        documentType: docType,
-        status: payload.status || 'BERLAKU',
-        legalRefNumber: payload.legalRefNumber || null,
-        enactmentDate: payload.enactmentDate ? new Date(payload.enactmentDate) : null,
-        totalIncome: Number(payload.totalIncome) || 0,
-        totalIncomeRealized: Number(payload.totalIncomeRealized) || 0,
-        totalExpenditure: Number(payload.totalExpenditure) || 0,
-        totalExpenditureRealized: Number(payload.totalExpenditureRealized) || 0,
-        totalFinancing: Number(payload.totalFinancing) || 0,
-        totalFinancingRealized: Number(payload.totalFinancingRealized) || 0,
-        realizationPercentage: Number(payload.realizationPercentage) || 0,
-        incomeBreakdown: payload.incomeBreakdown || [],
-        expenditureBreakdown: payload.expenditureBreakdown || [],
-        incomeItems: payload.incomeItems || null,
-        expenditureItems: payload.expenditureItems || null,
-        financingItems: payload.financingItems || null,
-        publicDocuments: payload.publicDocuments || []
-      },
-      create: {
-        year,
-        documentType: docType,
-        status: payload.status || 'BERLAKU',
-        legalRefNumber: payload.legalRefNumber || null,
-        enactmentDate: payload.enactmentDate ? new Date(payload.enactmentDate) : null,
-        totalIncome: Number(payload.totalIncome) || 0,
-        totalIncomeRealized: Number(payload.totalIncomeRealized) || 0,
-        totalExpenditure: Number(payload.totalExpenditure) || 0,
-        totalExpenditureRealized: Number(payload.totalExpenditureRealized) || 0,
-        totalFinancing: Number(payload.totalFinancing) || 0,
-        totalFinancingRealized: Number(payload.totalFinancingRealized) || 0,
-        realizationPercentage: Number(payload.realizationPercentage) || 0,
-        incomeBreakdown: payload.incomeBreakdown || [],
-        expenditureBreakdown: payload.expenditureBreakdown || [],
-        incomeItems: payload.incomeItems || null,
-        expenditureItems: payload.expenditureItems || null,
-        financingItems: payload.financingItems || null,
-        publicDocuments: payload.publicDocuments || []
-      }
+    const budgetPrisma = getPrisma();
+    const existingBudget = await budgetPrisma.budgetYearData.findFirst({
+      where: { year, documentType: docType }
     });
+    const budgetPayload = {
+      documentType: docType,
+      status: payload.status || 'BERLAKU',
+      legalRefNumber: payload.legalRefNumber || null,
+      enactmentDate: payload.enactmentDate ? new Date(payload.enactmentDate) : null,
+      totalIncome: Number(payload.totalIncome) || 0,
+      totalIncomeRealized: Number(payload.totalIncomeRealized) || 0,
+      totalExpenditure: Number(payload.totalExpenditure) || 0,
+      totalExpenditureRealized: Number(payload.totalExpenditureRealized) || 0,
+      totalFinancing: Number(payload.totalFinancing) || 0,
+      totalFinancingRealized: Number(payload.totalFinancingRealized) || 0,
+      realizationPercentage: Number(payload.realizationPercentage) || 0,
+      incomeBreakdown: payload.incomeBreakdown || [],
+      expenditureBreakdown: payload.expenditureBreakdown || [],
+      incomeItems: payload.incomeItems || null,
+      expenditureItems: payload.expenditureItems || null,
+      financingItems: payload.financingItems || null,
+      publicDocuments: payload.publicDocuments || []
+    };
+
+    const saved = existingBudget
+      ? await budgetPrisma.budgetYearData.update({
+          where: { id: existingBudget.id },
+          data: budgetPayload
+        })
+      : await budgetPrisma.budgetYearData.create({
+          data: {
+            year,
+            ...budgetPayload
+          }
+        });
 
     await recordAuditLogDb(
       req.user!.userId,
@@ -2826,8 +2884,8 @@ router.get('/profile', requireRoles('super_admin', 'admin_desa', 'operator', 'ed
       const db = getDb();
       return res.json({ success: true, degraded: true, data: db.villageProfile });
     }
-    const profile = await getPrisma().villageProfile.findUnique({
-      where: { id: 'default' }
+    const profile = await getPrisma().villageProfile.findFirst({
+      orderBy: { lastUpdated: 'desc' }
     });
     return res.json({ success: true, data: profile });
   } catch (error: any) {
@@ -2871,8 +2929,10 @@ router.put('/profile', requireRoles('super_admin', 'admin_desa'), async (req: Au
       return res.json({ success: true, degraded: true, data: db.villageProfile });
     }
 
-    const existing = await getPrisma().villageProfile.findUnique({
-      where: { id: 'default' }
+    const profilePrisma = getPrisma();
+    const activeCtx = getCurrentTenantContext();
+    const existing = await profilePrisma.villageProfile.findFirst({
+      orderBy: { lastUpdated: 'desc' }
     });
 
     // Guards: Ganti Logo Induk & Favicon (Hanya Super Admin)
@@ -2894,88 +2954,93 @@ router.put('/profile', requireRoles('super_admin', 'admin_desa'), async (req: Au
       }
     }
 
-    const profile = await getPrisma().villageProfile.upsert({
-      where: { id: 'default' },
-      update: {
-        totalPopulation: totalPopulation !== undefined ? Number(totalPopulation) : undefined,
-        totalFamilies: totalFamilies !== undefined ? Number(totalFamilies) : undefined,
-        villageName: villageName?.trim(),
-        kadesName: kadesName?.trim(),
-        kadesNip: kadesNip?.trim(),
-        district: district?.trim(),
-        email: email?.trim(),
-        phone: phone?.trim(),
-        addressStreet: addressStreet?.trim(),
-        vision: vision?.trim(),
-        mission: Array.isArray(mission) ? mission : undefined,
-        villageLogoUrl: villageLogoUrl !== undefined ? (villageLogoUrl && villageLogoUrl.trim().length > 0 ? villageLogoUrl.trim() : null) : undefined,
-        villageLogoSecondaryUrl: villageLogoSecondaryUrl !== undefined ? (villageLogoSecondaryUrl && villageLogoSecondaryUrl.trim().length > 0 ? villageLogoSecondaryUrl.trim() : null) : undefined,
-        regencyLogoUrl: regencyLogoUrl !== undefined ? (regencyLogoUrl && regencyLogoUrl.trim().length > 0 ? regencyLogoUrl.trim() : null) : undefined,
-        sadewaLogoUrl: sadewaLogoUrl !== undefined ? (sadewaLogoUrl && sadewaLogoUrl.trim().length > 0 ? sadewaLogoUrl.trim() : null) : undefined,
-        sadewaIconUrl: sadewaIconUrl !== undefined ? (sadewaIconUrl && sadewaIconUrl.trim().length > 0 ? sadewaIconUrl.trim() : null) : undefined,
-        officialSignatureUrl: officialSignatureUrl !== undefined ? (officialSignatureUrl && officialSignatureUrl.trim().length > 0 ? officialSignatureUrl.trim() : null) : undefined,
-        kadesPhotoUrl: kadesPhotoUrl !== undefined ? (kadesPhotoUrl && kadesPhotoUrl.trim().length > 0 ? kadesPhotoUrl.trim() : null) : undefined,
-        regency: regency?.trim(),
-        province: province?.trim(),
-        website: website?.trim(),
-        postalCode: postalCode?.trim(),
-        history: history?.trim(),
-        officeLocation: officeLocation !== undefined ? officeLocation : undefined,
-        motto: motto?.trim(),
-        kadesGreetingTitle: kadesGreetingTitle?.trim(),
-        kadesGreeting: kadesGreeting?.trim(),
-        heroTitle: heroTitle?.trim(),
-        heroSubtitle: heroSubtitle?.trim(),
-        heroBackgroundUrl: heroBackgroundUrl !== undefined ? (heroBackgroundUrl && heroBackgroundUrl.trim().length > 0 ? heroBackgroundUrl.trim() : null) : undefined,
-        heroBadgeText: heroBadgeText?.trim(),
-        heroIsActive: heroIsActive !== undefined ? Boolean(heroIsActive) : undefined,
-        whatsappCenter: whatsappCenter?.trim(),
-        operatingHours: operatingHours !== undefined ? operatingHours : undefined,
-        emergencyContacts: emergencyContacts !== undefined ? emergencyContacts : undefined,
-        letterCodePrefix: letterCodePrefix?.trim(),
-        lastUpdated: new Date()
-      },
-      create: {
-        id: 'default',
-        villageName: villageName?.trim() || 'Desa Pulau Betung',
-        kadesName: kadesName?.trim() || 'H. Sudirman',
-        kadesNip: kadesNip?.trim() || '-',
-        district: district?.trim() || '-',
-        regency: regency?.trim() || 'Kabupaten Batang Hari',
-        province: province?.trim() || 'Provinsi Jambi',
-        postalCode: postalCode?.trim() || '36657',
-        email: email?.trim(),
-        phone: phone?.trim(),
-        addressStreet: addressStreet?.trim(),
-        vision: vision?.trim() || '-',
-        mission: Array.isArray(mission) ? mission : [],
-        villageLogoUrl: villageLogoUrl && villageLogoUrl.length > 10 ? villageLogoUrl : undefined,
-        villageLogoSecondaryUrl: villageLogoSecondaryUrl && villageLogoSecondaryUrl.length > 10 ? villageLogoSecondaryUrl : undefined,
-        regencyLogoUrl: regencyLogoUrl && regencyLogoUrl.length > 10 ? regencyLogoUrl : undefined,
-        sadewaLogoUrl: sadewaLogoUrl && sadewaLogoUrl.length > 10 ? sadewaLogoUrl : undefined,
-        sadewaIconUrl: sadewaIconUrl && sadewaIconUrl.length > 10 ? sadewaIconUrl : undefined,
-        officialSignatureUrl: officialSignatureUrl && officialSignatureUrl.length > 10 ? officialSignatureUrl : undefined,
-        kadesPhotoUrl: kadesPhotoUrl && kadesPhotoUrl.length > 10 ? kadesPhotoUrl : undefined,
-        motto: motto?.trim(),
-        kadesGreetingTitle: kadesGreetingTitle?.trim(),
-        kadesGreeting: kadesGreeting?.trim(),
-        heroTitle: heroTitle?.trim(),
-        heroSubtitle: heroSubtitle?.trim(),
-        heroBackgroundUrl: heroBackgroundUrl && heroBackgroundUrl.length > 10 ? heroBackgroundUrl : undefined,
-        heroBadgeText: heroBadgeText?.trim(),
-        heroIsActive: heroIsActive !== undefined ? Boolean(heroIsActive) : true,
-        whatsappCenter: whatsappCenter?.trim(),
-        history: history?.trim() || 'Sejarah Desa Pulau Betung',
-        operatingHours: operatingHours || {},
-        emergencyContacts: emergencyContacts || [],
-        letterCodePrefix: letterCodePrefix?.trim() || 'PB',
-        totalPopulation: 0,
-        totalFamilies: 0,
-        areaSqKm: 0,
-        borders: {},
-        lastUpdated: new Date()
-      }
-    });
+    const updateFields = {
+      totalPopulation: totalPopulation !== undefined ? Number(totalPopulation) : undefined,
+      totalFamilies: totalFamilies !== undefined ? Number(totalFamilies) : undefined,
+      villageName: villageName?.trim(),
+      kadesName: kadesName?.trim(),
+      kadesNip: kadesNip?.trim(),
+      district: district?.trim(),
+      email: email?.trim(),
+      phone: phone?.trim(),
+      addressStreet: addressStreet?.trim(),
+      vision: vision?.trim(),
+      mission: Array.isArray(mission) ? mission : undefined,
+      villageLogoUrl: villageLogoUrl !== undefined ? (villageLogoUrl && villageLogoUrl.trim().length > 0 ? villageLogoUrl.trim() : null) : undefined,
+      villageLogoSecondaryUrl: villageLogoSecondaryUrl !== undefined ? (villageLogoSecondaryUrl && villageLogoSecondaryUrl.trim().length > 0 ? villageLogoSecondaryUrl.trim() : null) : undefined,
+      regencyLogoUrl: regencyLogoUrl !== undefined ? (regencyLogoUrl && regencyLogoUrl.trim().length > 0 ? regencyLogoUrl.trim() : null) : undefined,
+      sadewaLogoUrl: sadewaLogoUrl !== undefined ? (sadewaLogoUrl && sadewaLogoUrl.trim().length > 0 ? sadewaLogoUrl.trim() : null) : undefined,
+      sadewaIconUrl: sadewaIconUrl !== undefined ? (sadewaIconUrl && sadewaIconUrl.trim().length > 0 ? sadewaIconUrl.trim() : null) : undefined,
+      officialSignatureUrl: officialSignatureUrl !== undefined ? (officialSignatureUrl && officialSignatureUrl.trim().length > 0 ? officialSignatureUrl.trim() : null) : undefined,
+      kadesPhotoUrl: kadesPhotoUrl !== undefined ? (kadesPhotoUrl && kadesPhotoUrl.trim().length > 0 ? kadesPhotoUrl.trim() : null) : undefined,
+      regency: regency?.trim(),
+      province: province?.trim(),
+      website: website?.trim(),
+      postalCode: postalCode?.trim(),
+      history: history?.trim(),
+      officeLocation: officeLocation !== undefined ? officeLocation : undefined,
+      motto: motto?.trim(),
+      kadesGreetingTitle: kadesGreetingTitle?.trim(),
+      kadesGreeting: kadesGreeting?.trim(),
+      heroTitle: heroTitle?.trim(),
+      heroSubtitle: heroSubtitle?.trim(),
+      heroBackgroundUrl: heroBackgroundUrl !== undefined ? (heroBackgroundUrl && heroBackgroundUrl.trim().length > 0 ? heroBackgroundUrl.trim() : null) : undefined,
+      heroBadgeText: heroBadgeText?.trim(),
+      heroIsActive: heroIsActive !== undefined ? Boolean(heroIsActive) : undefined,
+      whatsappCenter: whatsappCenter?.trim(),
+      operatingHours: operatingHours !== undefined ? operatingHours : undefined,
+      emergencyContacts: emergencyContacts !== undefined ? emergencyContacts : undefined,
+      letterCodePrefix: letterCodePrefix?.trim(),
+      lastUpdated: new Date()
+    };
+
+    const profile = existing
+      ? await profilePrisma.villageProfile.update({
+          where: { id: existing.id },
+          data: updateFields
+        })
+      : await profilePrisma.villageProfile.create({
+          data: {
+            id: getTenantVillageProfileId(),
+            villageName: villageName?.trim() || activeCtx?.tenantName || 'Desa Pulau Betung',
+            kadesName: kadesName?.trim() || 'Kepala Desa',
+            kadesNip: kadesNip?.trim() || '-',
+            district: district?.trim() || '-',
+            regency: regency?.trim() || 'Kabupaten Batang Hari',
+            province: province?.trim() || 'Provinsi Jambi',
+            postalCode: postalCode?.trim() || '36657',
+            email: email?.trim(),
+            phone: phone?.trim(),
+            addressStreet: addressStreet?.trim(),
+            vision: vision?.trim() || '-',
+            mission: Array.isArray(mission) ? mission : [],
+            villageLogoUrl: villageLogoUrl && villageLogoUrl.length > 10 ? villageLogoUrl : undefined,
+            villageLogoSecondaryUrl: villageLogoSecondaryUrl && villageLogoSecondaryUrl.length > 10 ? villageLogoSecondaryUrl : undefined,
+            regencyLogoUrl: regencyLogoUrl && regencyLogoUrl.length > 10 ? regencyLogoUrl : undefined,
+            sadewaLogoUrl: sadewaLogoUrl && sadewaLogoUrl.length > 10 ? sadewaLogoUrl : undefined,
+            sadewaIconUrl: sadewaIconUrl && sadewaIconUrl.length > 10 ? sadewaIconUrl : undefined,
+            officialSignatureUrl: officialSignatureUrl && officialSignatureUrl.length > 10 ? officialSignatureUrl : undefined,
+            kadesPhotoUrl: kadesPhotoUrl && kadesPhotoUrl.length > 10 ? kadesPhotoUrl : undefined,
+            motto: motto?.trim(),
+            kadesGreetingTitle: kadesGreetingTitle?.trim(),
+            kadesGreeting: kadesGreeting?.trim(),
+            heroTitle: heroTitle?.trim(),
+            heroSubtitle: heroSubtitle?.trim(),
+            heroBackgroundUrl: heroBackgroundUrl && heroBackgroundUrl.length > 10 ? heroBackgroundUrl : undefined,
+            heroBadgeText: heroBadgeText?.trim(),
+            heroIsActive: heroIsActive !== undefined ? Boolean(heroIsActive) : true,
+            whatsappCenter: whatsappCenter?.trim(),
+            history: history?.trim() || `Sejarah ${activeCtx?.tenantName || 'Desa'}`,
+            operatingHours: operatingHours || {},
+            emergencyContacts: emergencyContacts || [],
+            letterCodePrefix: letterCodePrefix?.trim() || activeCtx?.letterCodePrefix || 'PB',
+            totalPopulation: 0,
+            totalFamilies: 0,
+            areaSqKm: 0,
+            borders: {},
+            lastUpdated: new Date()
+          }
+        });
 
     // Catat Audit Trail spesifik untuk perubahan branding/banner
     if (sadewaLogoUrl !== undefined && (!existing || existing.sadewaLogoUrl !== sadewaLogoUrl)) {
@@ -3492,48 +3557,54 @@ router.post('/reset-data', requireRoles('super_admin'), async (req: Authenticate
       });
     }
 
-    const prisma = getPrisma();
+    const mutationScope = assertSafeUnscopedMutation('POST /api/admin/reset-data');
+    const scopedDeleteWhere = mutationScope.tenantId ? { villageId: mutationScope.tenantId } : {};
+    const prisma = await getPrismaForActiveContext();
 
     // 1. FACTORY RESET: Hapus data transaksi, master, wilayah, kependudukan (AUDIT LOG DILEPAS & TIDAK DIHAPUS!)
-    await prisma.serviceRequest.deleteMany({});
-    await prisma.deletedServiceRequest.deleteMany({});
-    await prisma.complaint.deleteMany({});
-    await prisma.newsItem.deleteMany({});
-    await prisma.announcement.deleteMany({});
-    await prisma.agendaItem.deleteMany({});
-    await prisma.galleryItem.deleteMany({});
-    await prisma.developmentProject.deleteMany({});
-    await prisma.villagePotential.deleteMany({});
-    await prisma.umkmItem.deleteMany({});
-    await prisma.mapFacility.deleteMany({});
-    await prisma.landParcel.deleteMany({});
-    await prisma.toddlerMeasurement.deleteMany({});
-    await prisma.toddlerRecord.deleteMany({});
-    await prisma.posyanduSchedule.deleteMany({});
-    await prisma.bansosRecipient.deleteMany({});
-    await prisma.attendanceLog.deleteMany({});
-    await prisma.resident.deleteMany({});
-    await prisma.rT.deleteMany({});
-    await prisma.rW.deleteMany({});
-    await prisma.dusun.deleteMany({});
-    await prisma.villageService.deleteMany({});
-    await prisma.villageOfficial.deleteMany({});
-    await prisma.budgetYearData.deleteMany({});
+    await prisma.serviceRequest.deleteMany({ where: scopedDeleteWhere });
+    await prisma.deletedServiceRequest.deleteMany({ where: scopedDeleteWhere });
+    await prisma.complaint.deleteMany({ where: scopedDeleteWhere });
+    await prisma.newsItem.deleteMany({ where: scopedDeleteWhere });
+    await prisma.announcement.deleteMany({ where: scopedDeleteWhere });
+    await prisma.agendaItem.deleteMany({ where: scopedDeleteWhere });
+    await prisma.galleryItem.deleteMany({ where: scopedDeleteWhere });
+    await prisma.developmentProject.deleteMany({ where: scopedDeleteWhere });
+    await prisma.villagePotential.deleteMany({ where: scopedDeleteWhere });
+    await prisma.umkmItem.deleteMany({ where: scopedDeleteWhere });
+    await prisma.mapFacility.deleteMany({ where: scopedDeleteWhere });
+    await prisma.landParcel.deleteMany({ where: scopedDeleteWhere });
+    await prisma.toddlerMeasurement.deleteMany({ where: scopedDeleteWhere });
+    await prisma.toddlerRecord.deleteMany({ where: scopedDeleteWhere });
+    await prisma.posyanduSchedule.deleteMany({ where: scopedDeleteWhere });
+    await prisma.bansosRecipient.deleteMany({ where: scopedDeleteWhere });
+    await prisma.attendanceLog.deleteMany({ where: scopedDeleteWhere });
+    await prisma.resident.deleteMany({ where: scopedDeleteWhere });
+    await prisma.rT.deleteMany({ where: scopedDeleteWhere });
+    await prisma.rW.deleteMany({ where: scopedDeleteWhere });
+    await prisma.dusun.deleteMany({ where: scopedDeleteWhere });
+    await prisma.villageService.deleteMany({ where: scopedDeleteWhere });
+    await prisma.villageOfficial.deleteMany({ where: scopedDeleteWhere });
+    await prisma.budgetYearData.deleteMany({ where: scopedDeleteWhere });
     // ⚠️ BARIS await prisma.auditLog.deleteMany({}); TELAH DIHAPUS - AUDIT LOG SURVIVES RESET
 
-    // 2. Hapus seluruh berkas media/gambar di bucket Supabase Storage saat Factory Reset
-    await clearSupabaseStorageBucket();
+    // 2. Hapus seluruh berkas media/gambar di bucket Supabase Storage saat Factory Reset (terbatas prefix tenant jika multi-tenant)
+    await clearSupabaseStorageBucket(
+      mutationScope.tenantId ? `tenants/${mutationScope.tenantId}` : undefined
+    );
 
     // 2. Pertahankan HANYA 1 Super Admin yang sedang melakukan reset (mencegah lockout)
     await prisma.user.deleteMany({
       where: {
-        id: { not: currentUserId }
+        id: { not: currentUserId },
+        ...scopedDeleteWhere
       }
     });
 
     // 3. Reset Profil Desa kembali ke kondisi awal "Baru Install" (FIX 4: Clear Logo & Foto)
+    const profileRecordId = mutationScope.tenantId ? `profile-${mutationScope.tenantId}` : 'default';
     await prisma.villageProfile.upsert({
-      where: { id: 'default' },
+      where: { id: profileRecordId },
       update: {
         villageName: 'Desa Pulau Betung',
         district: 'Pemayung',
@@ -3563,7 +3634,7 @@ router.post('/reset-data', requireRoles('super_admin'), async (req: Authenticate
         lastUpdated: new Date()
       },
       create: {
-        id: 'default',
+        id: profileRecordId,
         villageName: 'Desa Pulau Betung',
         kadesName: 'H. Sudirman',
         kadesNip: '-',
@@ -3646,6 +3717,12 @@ router.post('/reset-data', requireRoles('super_admin'), async (req: Authenticate
       message: 'SaaS Factory Reset BERHASIL. Pangkalan data Supabase PostgreSQL telah dibersihkan kembali ke kondisi baru install. Akun Super Admin Anda tetap aktif.'
     });
   } catch (err: any) {
+    if (err instanceof TenantScopeViolationError) {
+      return res.status(403).json({
+        success: false,
+        error: err.message
+      });
+    }
     return res.status(500).json({
       success: false,
       error: `Gagal memproses SaaS Factory Reset: ${err.message}`
@@ -3653,29 +3730,38 @@ router.post('/reset-data', requireRoles('super_admin'), async (req: Authenticate
   }
 });
 
-// 11. Automated & Manual Backup Management (Super Admin & Admin Desa)
+// 11. Automated & Manual Backup Management (Super Admin & Admin Desa — Tenant-Isolated)
 // Keyword: BACKUP
-const BACKUP_DIR = SERVER_CONFIG.BACKUP_DIR;
-function ensureBackupDir() {
+function getActiveBackupDir(): string {
+  const ctx = getCurrentTenantContext();
+  if (ctx?.tenantId) {
+    return path.join(SERVER_CONFIG.BACKUP_DIR, 'tenants', ctx.tenantId);
+  }
+  return SERVER_CONFIG.BACKUP_DIR;
+}
+
+function ensureBackupDir(): string {
+  const dir = getActiveBackupDir();
   try {
-    if (!fs.existsSync(BACKUP_DIR)) {
-      fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
     }
   } catch (err) {
     console.warn('⚠️ [Backup] Direktori backup lokal tidak dapat ditulis:', err);
   }
+  return dir;
 }
 
-// List all database backups with metadata
+// List all database backups with metadata (scoped per tenant)
 router.get('/backups', requireRoles('super_admin', 'admin_desa'), (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
-    ensureBackupDir();
-    if (!fs.existsSync(BACKUP_DIR)) {
+    const dir = ensureBackupDir();
+    if (!fs.existsSync(dir)) {
       return res.json({ success: true, count: 0, data: [] });
     }
-    const files = fs.readdirSync(BACKUP_DIR).filter((f: any) => f.endsWith('.json'));
+    const files = fs.readdirSync(dir).filter((f: any) => f.endsWith('.json'));
     const backups = files.map((fileName) => {
-      const filePath = path.join(BACKUP_DIR, fileName);
+      const filePath = path.join(dir, fileName);
       const stats = fs.statSync(filePath);
       return {
         fileName,
@@ -3722,12 +3808,13 @@ router.post('/backups/create', requireRoles('super_admin', 'admin_desa'), async 
   }
 });
 
-// FIX 2: Helper untuk validasi path backup (Anti-Traversal)
+// FIX 2: Helper untuk validasi path backup (Anti-Traversal + Strict Tenant Boundary)
 const getSafeBackupPath = (filename: string) => {
   const sanitized = path.basename(filename);
   if (!/^[\w.-]+\.json$/.test(sanitized)) return null;
-  const fullPath = path.resolve(BACKUP_DIR, sanitized);
-  if (!fullPath.startsWith(path.resolve(BACKUP_DIR))) return null;
+  const resolvedDir = path.resolve(getActiveBackupDir());
+  const fullPath = path.resolve(resolvedDir, sanitized);
+  if (!fullPath.startsWith(resolvedDir + path.sep)) return null;
   return { fullPath, sanitized };
 };
 
@@ -3834,7 +3921,7 @@ router.post('/kpm', requireRoles('super_admin', 'admin_desa', 'operator'), async
 
     if (!residentId && nik) {
       const cleanNik = String(nik).trim();
-      const resident = await prisma.resident.findUnique({ where: { nik: cleanNik } });
+      const resident = await prisma.resident.findFirst({ where: { nik: cleanNik } });
       if (resident) {
         residentId = resident.id;
       } else {
@@ -4100,16 +4187,16 @@ router.delete('/land-parcels/:id', requireRoles('super_admin', 'admin_desa'), as
 
 // --- DATABASE BACKUP & MAINTENANCE (SUPER ADMIN ONLY) ---
 router.get('/maintenance/backups', requireRoles('super_admin'), (req: AuthenticatedRequest, res: ExpressResponse) => {
-  ensureBackupDir();
-  if (!fs.existsSync(BACKUP_DIR)) {
+  const dir = ensureBackupDir();
+  if (!fs.existsSync(dir)) {
     return res.json({ success: true, data: [] });
   }
 
   try {
-    const files = fs.readdirSync(BACKUP_DIR)
+    const files = fs.readdirSync(dir)
       .filter(f => f.endsWith('.json'))
       .map(f => {
-        const stats = fs.statSync(path.join(BACKUP_DIR, f));
+        const stats = fs.statSync(path.join(dir, f));
         return {
           filename: f,
           size: stats.size,
@@ -4261,26 +4348,27 @@ router.post('/reset-database', requireRoles('super_admin'), async (req: Authenti
       });
     }
 
-    const prisma = getPrisma();
+    const scopedDeleteWhere = getScopedDeleteWhere({}, 'POST /api/admin/reset-database');
+    const prisma = await getPrismaForActiveContext();
 
     // Clear all operational tables in Prisma / Supabase (AuditLog TIDAK dihapus agar jejak forensik tetap utuh)
     await prisma.$transaction([
-      prisma.toddlerMeasurement.deleteMany({}),
-      prisma.toddlerRecord.deleteMany({}),
-      prisma.bansosRecipient.deleteMany({}),
-      prisma.deletedServiceRequest.deleteMany({}),
-      prisma.serviceRequest.deleteMany({}),
-      prisma.complaint.deleteMany({}),
-      prisma.resident.deleteMany({}),
-      prisma.developmentProject.deleteMany({}),
-      prisma.landParcel.deleteMany({}),
-      prisma.newsItem.deleteMany({}),
-      prisma.announcement.deleteMany({}),
-      prisma.agendaItem.deleteMany({}),
-      prisma.galleryItem.deleteMany({}),
-      prisma.umkmItem.deleteMany({}),
-      prisma.mapFacility.deleteMany({}),
-      prisma.attendanceLog.deleteMany({})
+      prisma.toddlerMeasurement.deleteMany({ where: scopedDeleteWhere }),
+      prisma.toddlerRecord.deleteMany({ where: scopedDeleteWhere }),
+      prisma.bansosRecipient.deleteMany({ where: scopedDeleteWhere }),
+      prisma.deletedServiceRequest.deleteMany({ where: scopedDeleteWhere }),
+      prisma.serviceRequest.deleteMany({ where: scopedDeleteWhere }),
+      prisma.complaint.deleteMany({ where: scopedDeleteWhere }),
+      prisma.resident.deleteMany({ where: scopedDeleteWhere }),
+      prisma.developmentProject.deleteMany({ where: scopedDeleteWhere }),
+      prisma.landParcel.deleteMany({ where: scopedDeleteWhere }),
+      prisma.newsItem.deleteMany({ where: scopedDeleteWhere }),
+      prisma.announcement.deleteMany({ where: scopedDeleteWhere }),
+      prisma.agendaItem.deleteMany({ where: scopedDeleteWhere }),
+      prisma.galleryItem.deleteMany({ where: scopedDeleteWhere }),
+      prisma.umkmItem.deleteMany({ where: scopedDeleteWhere }),
+      prisma.mapFacility.deleteMany({ where: scopedDeleteWhere }),
+      prisma.attendanceLog.deleteMany({ where: scopedDeleteWhere })
     ]);
 
     await recordAuditLogDb(
@@ -4295,6 +4383,9 @@ router.post('/reset-database', requireRoles('super_admin'), async (req: Authenti
 
     return res.json({ success: true, message: 'Seluruh data dummy berhasil dibersihkan dari database Supabase (Log audit tetap dipertahankan).' });
   } catch (error: any) {
+    if (error instanceof TenantScopeViolationError) {
+      return res.status(403).json({ success: false, error: error.message });
+    }
     console.error('❌ [RESET-DB-ERROR]:', error?.message || error);
     return res.status(500).json({ success: false, error: 'Gagal mereset database: ' + (error?.message || '') });
   }

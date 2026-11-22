@@ -58,22 +58,21 @@ import { INITIAL_LAND_PARCELS } from '../data/initialWebGisData';
 import { calculatePolygonAreaShoelace } from '../utils/geometryEngine';
 import { useQueryClient } from '@tanstack/react-query';
 import { useServiceRequests } from '../hooks/useServiceRequests';
-
-const LOCAL_STORAGE_PREFIX = 'pulau_betung_';
+import {
+  getTenantAuthToken,
+  clearTenantAuthSession,
+  loadTenantStored,
+  saveTenantStored,
+  removeTenantStored,
+  clearTenantLocalStoredAll
+} from '../utils/tenantStorage';
 
 function loadStored<T>(key: string, fallback: T): T {
-  try {
-    const item = localStorage.getItem(LOCAL_STORAGE_PREFIX + key);
-    return item ? JSON.parse(item) : fallback;
-  } catch (e) {
-    return fallback;
-  }
+  return loadTenantStored(key, fallback);
 }
 
 function saveStored<T>(key: string, data: T) {
-  try {
-    localStorage.setItem(LOCAL_STORAGE_PREFIX + key, JSON.stringify(data));
-  } catch (e) {}
+  saveTenantStored(key, data);
 }
 
 /**
@@ -183,9 +182,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLoading, setIsLoading] = useState(true);
 
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('pulau_betung_auth_token') : null;
+    const token = getTenantAuthToken();
     if (!token) {
-      if (typeof window !== 'undefined') localStorage.removeItem('pulau_betung_current_user');
+      removeTenantStored('current_user');
       return null;
     }
     return loadStored('current_user', null);
@@ -252,7 +251,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     const fetchBansos = async () => {
       try {
-        const token = localStorage.getItem('pulau_betung_auth_token');
+        const token = getTenantAuthToken();
         const storedUser = token ? loadStored<User | null>('current_user', null) : null;
         const canAccessAdminKpm = Boolean(
           token && storedUser && ['super_admin', 'admin_desa', 'operator'].includes(storedUser.role)
@@ -270,7 +269,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Fetch Audit Logs from API when Admin
   useEffect(() => {
-    const token = localStorage.getItem('pulau_betung_auth_token');
+    const token = getTenantAuthToken();
     const isAuthorized = !isLoading && token && currentUser && (currentUser.role === 'super_admin' || currentUser.role === 'admin_desa');
     
     if (isAuthorized) {
@@ -293,12 +292,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [currentUser, isLoading]);
 
-  // Sinkronisasi ke local storage (Hanya Session & User Preferences)
+  // Sinkronisasi ke local storage (Hanya Session & User Preferences terisolasi per host)
   useEffect(() => {
     if (currentUser) {
       saveStored('current_user', currentUser);
-    } else if (typeof window !== 'undefined') {
-      localStorage.removeItem('pulau_betung_current_user');
+    } else {
+      removeTenantStored('current_user');
     }
     saveStored('user_liked_items', userLikedItems);
     
@@ -469,10 +468,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (bootstrap.profile) setVillageProfile((prev) => ({ ...prev, ...bootstrap.profile }));
       }
 
-      const token = localStorage.getItem('pulau_betung_auth_token');
+      const token = getTenantAuthToken();
       if (!token) {
         setCurrentUser(null);
-        localStorage.removeItem('pulau_betung_current_user');
+        removeTenantStored('current_user');
       } else {
         try {
           const me = await api.getCurrentUser(token);
@@ -556,8 +555,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (checkRes && (checkRes.status === 401 || checkRes.status === 403)) {
               console.warn('Sesi tidak valid, mengeluarkan pengguna.');
               setCurrentUser(null);
-              localStorage.removeItem('pulau_betung_auth_token');
-              localStorage.removeItem('pulau_betung_current_user');
+              clearTenantAuthSession();
             }
           }
         } catch (meErr) {
@@ -1398,7 +1396,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return { success: false, error: res.error || 'Otorisasi reset database gagal.' };
     }
 
-    Object.keys(localStorage).filter(k => k.startsWith(LOCAL_STORAGE_PREFIX)).forEach(k => localStorage.removeItem(k));
+    clearTenantLocalStoredAll();
     
     // Keep only the first Super Admin
     setUsers([INITIAL_USERS[0]]);

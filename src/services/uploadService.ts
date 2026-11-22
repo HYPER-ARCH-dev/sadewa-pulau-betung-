@@ -4,6 +4,7 @@ import {
   CompressImageResult,
   formatFileSize
 } from '../utils/imageCompressor';
+import { getTenantAuthToken } from '../utils/tenantStorage';
 
 /**
  * ============================================================================
@@ -123,7 +124,7 @@ export async function uploadImageService(
       formData.append('file', processedFile);
 
       // Ambil token autentikasi jika backend Anda memerlukan Bearer token
-      const token = localStorage.getItem('pulau_betung_auth_token');
+      const token = getTenantAuthToken();
 
       const uploadEndpoint = `${API_URL.replace(/\/$/, '')}/upload?module=${encodeURIComponent(targetModule)}`;
 

@@ -4,8 +4,11 @@
  * Keyword: OFFICIAL_LETTER, LETTER_NUMBER
  */
 
+import crypto from 'node:crypto';
+import { PrismaClient } from '@prisma/client';
 import { ServiceRequest } from '../../src/types';
 import { SERVER_CONFIG } from '../config/constants';
+import { getCurrentTenantContext } from '../db/tenantContext';
 
 export interface LetterClassification {
   code: string;       // Kode Klasifikasi Permendagri No. 83 Tahun 2022
@@ -180,26 +183,105 @@ class AsyncLock {
 
 const letterLock = new AsyncLock();
 
+export interface LetterNumberingOptions {
+  prisma?: PrismaClient;
+  villageId?: string | null;
+  villageCode?: string | null;
+}
+
 /**
- * Server-side Atomic Letter Number Generator
- * Menjamin:
- * 1. Monotonik berurutan (001, 002, dst.)
- * 2. Reset otomatis setiap awal bulan
- * 3. Bebas dari race condition (menggunakan atomic lock)
- * 4. Pengecekan collision/unique constraint terhadap seluruh database
+ * Server-side Atomic Letter Number Generator (Multi-Tenant & Database-Atomic)
+ * - Jika `options.prisma` disediakan: menggunakan atomic PostgreSQL UPSERT pada tabel
+ *   `LetterSequenceCounter(villageId, classificationCode, year, month)` sehingga dua server
+ *   atau dua desa tidak pernah menerbitkan nomor ganda.
+ * - Jika berjalan pada mode JSON offline / tanpa DB: fallback ke in-memory AsyncLock.
  */
 export async function assignServerLetterNumberAtomic(
   serviceName: string,
   targetDate: string | Date | undefined,
   allRequests: ServiceRequest[],
-  excludeRequestId?: string
+  excludeRequestId?: string,
+  options: LetterNumberingOptions = {}
 ): Promise<string> {
-  return letterLock.acquire(async () => {
-    const classification = getLetterClassification(serviceName);
-    const { month, year } = extractMonthAndYear(targetDate);
-    const romanMonth = toRomanMonth(month);
+  const ctx = getCurrentTenantContext();
+  const classification = getLetterClassification(serviceName);
+  const { month, year } = extractMonthAndYear(targetDate);
+  const romanMonth = toRomanMonth(month);
+  const villageCode =
+    options.villageCode?.trim() ||
+    ctx?.letterCodePrefix?.trim() ||
+    SERVER_CONFIG.VILLAGE_CODE;
+  const effectiveVillageId =
+    options.villageId?.trim() ||
+    ctx?.tenantId ||
+    'tenant_pulau_betung';
 
-    // Filter permohonan yang berada di bulan dan tahun yang sama
+  if (options.prisma) {
+    const db = options.prisma as any;
+    return letterLock.acquire(async () => {
+      for (let attempt = 0; attempt < 25; attempt++) {
+        let nextSeq: number;
+
+        if (typeof db.$queryRawUnsafe === 'function') {
+          const idSeed = `lsc-${crypto.randomUUID()}`;
+          const rows = (await db.$queryRawUnsafe(
+            `INSERT INTO "sadewa"."LetterSequenceCounter" ("id", "villageId", "classificationCode", "year", "month", "lastSequence", "updatedAt")
+             VALUES ($1, $2, $3, $4, $5, 1, NOW())
+             ON CONFLICT ("villageId", "classificationCode", "year", "month")
+             DO UPDATE SET "lastSequence" = "sadewa"."LetterSequenceCounter"."lastSequence" + 1, "updatedAt" = NOW()
+             RETURNING "lastSequence"`,
+            idSeed,
+            effectiveVillageId,
+            classification.code,
+            year,
+            month
+          )) as Array<{ lastSequence: number }>;
+
+          nextSeq = Number(rows?.[0]?.lastSequence ?? 1);
+        } else {
+          const counterRow = await db.letterSequenceCounter.upsert({
+            where: {
+              villageId_classificationCode_year_month: {
+                villageId: effectiveVillageId,
+                classificationCode: classification.code,
+                year,
+                month
+              }
+            },
+            update: { lastSequence: { increment: 1 } },
+            create: {
+              villageId: effectiveVillageId,
+              classificationCode: classification.code,
+              year,
+              month,
+              lastSequence: 1
+            }
+          });
+          nextSeq = Number(counterRow?.lastSequence ?? 1);
+        }
+
+        const paddedSeq = String(nextSeq).padStart(3, '0');
+        const candidate = `${classification.code} / ${paddedSeq} / ${classification.label} / ${villageCode} / ${romanMonth} / ${year}`;
+
+        // Pastikan tidak bentrok dengan nomor manual yang mungkin sudah tersimpan di ServiceRequest
+        const collision = await db.serviceRequest.findFirst({
+          where: {
+            officialLetterNumber: candidate,
+            ...(excludeRequestId ? { id: { not: excludeRequestId } } : {})
+          },
+          select: { id: true }
+        });
+
+        if (!collision) {
+          return candidate;
+        }
+      }
+
+      throw new Error('Gagal menghasilkan nomor surat unik setelah beberapa percobaan.');
+    });
+  }
+
+  return letterLock.acquire(async () => {
     const monthRequests = allRequests.filter((r) => {
       if (excludeRequestId && r.id === excludeRequestId) return false;
       const rDate = extractMonthAndYear(r.completedAt || r.requestDate);
@@ -217,7 +299,6 @@ export async function assignServerLetterNumberAtomic(
 
     for (const r of monthRequests) {
       if (r.officialLetterNumber) {
-        // Format: "510 / 001 / SKU / PB-PMY / IX / 2026"
         const parts = r.officialLetterNumber.split('/').map((p) => p.trim());
         if (parts.length >= 2) {
           const seq = parseInt(parts[1], 10);
@@ -228,13 +309,12 @@ export async function assignServerLetterNumberAtomic(
       }
     }
 
-    // Cari sequence berikutnya yang unik
     let nextSeq = maxSeq + 1;
     let candidate = '';
 
     while (true) {
       const paddedSeq = String(nextSeq).padStart(3, '0');
-      candidate = `${classification.code} / ${paddedSeq} / ${classification.label} / ${SERVER_CONFIG.VILLAGE_CODE} / ${romanMonth} / ${year}`;
+      candidate = `${classification.code} / ${paddedSeq} / ${classification.label} / ${villageCode} / ${romanMonth} / ${year}`;
       if (!existingNumbers.has(candidate)) {
         break;
       }

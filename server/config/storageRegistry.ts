@@ -232,3 +232,68 @@ export function getStorageArchitectureSummary() {
     }))
   };
 }
+
+/**
+ * Menyelesaikan target penyimpanan yang terisolasi per tenant (`tenants/<tenantId>/...`)
+ * sembari menjaga kompatibilitas penuh dengan struktur single-tenant eksisting.
+ */
+export function resolveTenantStorageTarget(params: {
+  moduleKey?: string | null;
+  fieldName?: string | null;
+  reqPath?: string | null;
+  fileName: string;
+  tenantId?: string | null;
+  useTenantPrefix?: boolean;
+}): ResolvedStorageTarget & { tenantId: string | null } {
+  const base = resolveStorageTarget(params);
+  const cleanTenant = params.tenantId?.trim() || null;
+  const shouldPrefix = Boolean(cleanTenant && params.useTenantPrefix !== false);
+
+  if (!shouldPrefix || !cleanTenant) {
+    return {
+      ...base,
+      tenantId: cleanTenant
+    };
+  }
+
+  return {
+    ...base,
+    tenantId: cleanTenant,
+    cloudObjectPath: `tenants/${cleanTenant}/${base.cloudObjectPath}`,
+    localTargetDir: path.join(base.localBaseDir, 'tenants', cleanTenant, base.subfolder),
+    localPublicUrl: base.isPrivate
+      ? `/api/upload/private/tenants/${cleanTenant}/${base.relativeObjectPath}`
+      : `/uploads/tenants/${cleanTenant}/${base.relativeObjectPath}`
+  };
+}
+
+/**
+ * Mengembalikan kandidat path (urut prioritas) agar berkas historis Desa Pulau Betung
+ * di path lama (`/uploads/...` / `public/...`) maupun path baru (`tenants/<tenantId>/...`)
+ * tetap dapat dibaca tanpa memutus tautan dokumen arsip.
+ */
+export function resolveLegacyCompatibleStorageCandidates(
+  relativeOrStoredPath: string,
+  tenantId?: string | null
+): string[] {
+  const normalized = String(relativeOrStoredPath || '').trim().replace(/^\/+/, '');
+  if (!normalized) return [];
+
+  const candidates: string[] = [];
+  const cleanTenant = tenantId?.trim();
+
+  if (cleanTenant && !normalized.startsWith(`tenants/${cleanTenant}/`)) {
+    candidates.push(`tenants/${cleanTenant}/${normalized}`);
+  }
+
+  candidates.push(normalized);
+
+  // Jika path diawali prefix tenant, sediakan juga fallback ke path legacy tanpa prefix
+  const tenantPrefixMatch = normalized.match(/^tenants\/[^/]+\/(.+)$/);
+  if (tenantPrefixMatch?.[1]) {
+    candidates.push(tenantPrefixMatch[1]);
+  }
+
+  return [...new Set(candidates)];
+}
+

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { ToddlerRecord } from '../types/posyandu';
 import { api } from '../services/api';
 import { useApp } from '../context/AppContext';
+import { getTenantAuthToken } from '../utils/tenantStorage';
 
 export const useToddlers = () => {
   const { currentUser, isLoading: isAppLoading } = useApp();
@@ -10,7 +11,7 @@ export const useToddlers = () => {
   const [error, setError] = useState<string | null>(null);
 
   const fetchToddlers = useCallback(async () => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('pulau_betung_auth_token') : null;
+    const token = getTenantAuthToken();
     const isAuthorized =
       !!token &&
       !!currentUser &&

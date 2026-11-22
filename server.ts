@@ -21,7 +21,8 @@ import { createServer as createViteServer } from 'vite';
 import { getSessionSecret } from './server/auth';
 import { createApiApp } from './server/app';
 import { getDb } from './server/db/database';
-import { runDatabaseBackup } from './server/scripts/db-backup';
+import { isMultiTenantRoutingEnabled } from './server/db/tenantContext';
+import { runAllTenantsBackupSweep } from './server/scripts/db-backup';
 import cron from 'node-cron';
 
 /**
@@ -39,12 +40,14 @@ async function startServer() {
     }
   }
 
-  // --- 2. INISIALISASI PANGKALAN DATA (DATABASE) ---
-  try {
-    getDb();
-    console.log('✅ Pangkalan data Pulau Betung berhasil dimuat.');
-  } catch (dbErr) {
-    console.error('Error saat inisialisasi pangkalan data:', dbErr);
+  // --- 2. INISIALISASI PANGKALAN DATA LOKAL (Hanya jika mode fallback JSON diizinkan) ---
+  if (!isMultiTenantRoutingEnabled() && process.env.MIGRATION_PHASE !== 'PHASE_3_SUPABASE_ONLY') {
+    try {
+      getDb();
+      console.log('✅ Pangkalan data lokal fallback siap digunakan.');
+    } catch (dbErr) {
+      console.error('Error saat inisialisasi pangkalan data:', dbErr);
+    }
   }
 
   // Buat aplikasi Express bersama seluruh rute API & keamanan
@@ -93,23 +96,25 @@ async function startServer() {
   }
 
   // ==========================================================================
-  // 🚀 MENJALANKAN LISTENER SERVER & PENJADWAL BACKUP OTOMATIS
+  // 🚀 MENJALANKAN LISTENER SERVER & PENJADWAL BACKUP OTOMATIS PER-TENANT
   // ==========================================================================
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Server Sistem Desa Pulau Betung aktif pada port ${PORT}`);
+    console.log(`🚀 Server SADEWA aktif pada port ${PORT}`);
 
     cron.schedule('0 2 * * *', async () => {
-      console.log('⏰ [CRON-BACKUP] Memulai proses backup database terjadwal (02:00 AM)...');
+      console.log('⏰ [CRON-BACKUP] Memulai backup database terjadwal terisolasi per-tenant (02:00 WIB)...');
       try {
-        const result = await runDatabaseBackup();
-        console.log(`✅ [CRON-BACKUP] Sukses (${result.mode}): ${result.fileName} berhasil disimpan.`);
+        const summary = await runAllTenantsBackupSweep();
+        console.log(
+          `✅ [CRON-BACKUP] Sweep selesai: ${summary.succeeded}/${summary.totalTenants} tenant berhasil, ${summary.failed} gagal.`
+        );
       } catch (err: any) {
         console.error('❌ [CRON-BACKUP] Gagal:', err?.message || err);
       }
     }, {
       timezone: "Asia/Jakarta"
     });
-    console.log('⏰ [CRON-SCHEDULER] Backup harian terkonfigurasi (Setiap hari pukul 02:00 WIB).');
+    console.log('⏰ [CRON-SCHEDULER] Backup harian terisolasi per-tenant terkonfigurasi (02:00 WIB).');
   });
 }
 

@@ -34,6 +34,11 @@ import {
 } from '../types';
 import { Resident } from '../types/resident';
 import { compressImage, isImageFile, formatFileSize } from '../utils/imageCompressor';
+import {
+  getTenantAuthToken,
+  setTenantAuthToken,
+  clearTenantAuthSession
+} from '../utils/tenantStorage';
 
 // Struktur standar pembungkus balasan API
 export interface ApiResponse<T = unknown> {
@@ -54,7 +59,7 @@ function getAuthHeaders(token?: string | null): HeadersInit {
   const headers: HeadersInit = {
     'Content-Type': 'application/json'
   };
-  const activeToken = token || localStorage.getItem('pulau_betung_auth_token');
+  const activeToken = token || getTenantAuthToken();
   if (activeToken) {
     headers['Authorization'] = `Bearer ${activeToken}`;
   }
@@ -71,12 +76,11 @@ const processResponse = async <T>(res: Response): Promise<{ success: boolean; da
   // Jika server menolak dengan status 401 Unauthorized
   if (res.status === 401) {
     const isUrlAdmin = res.url.includes('/admin/');
-    const hasToken = !!localStorage.getItem('pulau_betung_auth_token');
+    const hasToken = !!getTenantAuthToken();
     
     // Hanya redirect paksa jika request ditujukan ke endpoint admin dan user memang punya token sebelumnya
     if (isUrlAdmin && hasToken) {
-      localStorage.removeItem('pulau_betung_auth_token');
-      localStorage.removeItem('pulau_betung_current_user');
+      clearTenantAuthSession();
       if (typeof window !== 'undefined') {
         const currentUrl = new URL(window.location.href);
         if (currentUrl.searchParams.get('login') !== 'expired') {
@@ -151,7 +155,7 @@ export const api = {
         return { success: false, error: json.error || 'Gagal masuk. Periksa username dan password.' };
       }
       if (json.token) {
-        localStorage.setItem('pulau_betung_auth_token', json.token);
+        setTenantAuthToken(json.token);
       }
       return { success: true, user: json.user, token: json.token };
     } catch (err: unknown) {
@@ -181,8 +185,7 @@ export const api = {
         headers: getAuthHeaders()
       });
     } finally {
-      localStorage.removeItem('pulau_betung_auth_token');
-      localStorage.removeItem('pulau_betung_current_user');
+      clearTenantAuthSession();
     }
   },
 
@@ -508,10 +511,11 @@ export const api = {
       formData.append('module', targetModule);
       formData.append(targetField, fileToUpload);
 
+      const uploadToken = getTenantAuthToken();
       const res = await fetch(`${BASE_URL}/upload?module=${encodeURIComponent(targetModule)}`, {
         method: 'POST',
         headers: {
-          ...(localStorage.getItem('pulau_betung_auth_token') ? { 'Authorization': `Bearer ${localStorage.getItem('pulau_betung_auth_token')}` } : {})
+          ...(uploadToken ? { 'Authorization': `Bearer ${uploadToken}` } : {})
         },
         body: formData
       });
@@ -1245,7 +1249,7 @@ export const api = {
       });
       const json = await res.json();
       if (res.ok && json.success && json.token) {
-        localStorage.setItem('pulau_betung_auth_token', json.token);
+        setTenantAuthToken(json.token);
       }
       return { success: res.ok && json.success, message: json.message, token: json.token, error: json.error };
     } catch (err: unknown) {
@@ -1262,7 +1266,7 @@ export const api = {
       });
       const json = await res.json();
       if (res.ok && json.success && json.token) {
-        localStorage.setItem('pulau_betung_auth_token', json.token);
+        setTenantAuthToken(json.token);
       }
       return { success: res.ok && json.success, message: json.message, token: json.token, error: json.error };
     } catch (err: unknown) {

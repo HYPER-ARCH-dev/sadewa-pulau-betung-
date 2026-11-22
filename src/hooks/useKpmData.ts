@@ -1,6 +1,7 @@
 import { useInfiniteQuery, QueryFunctionContext } from '@tanstack/react-query';
 import { BansosRecipient } from '../types/bansos';
 import { api } from '../services/api';
+import { getTenantAuthToken } from '../utils/tenantStorage';
 
 type KpmQueryKey = ['kpm_bansos', { programType: string; status?: string }];
 
@@ -9,7 +10,7 @@ const fetchKpmPage = async ({ pageParam, queryKey }: QueryFunctionContext<KpmQue
   const [_key, filters] = queryKey;
   
   // Mendeteksi apakah user adalah Admin atau Warga
-  const token = localStorage.getItem('pulau_betung_auth_token');
+  const token = getTenantAuthToken();
   const res = token ? await api.getKpmData() : await api.getPublicKpmData();
   
   if (!res.success || !res.data) return { data: [], lastVisible: null };

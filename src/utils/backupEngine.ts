@@ -1,15 +1,7 @@
+import { collectTenantLocalBackup } from './tenantStorage';
+
 export const createBackup = (onSuccess?: () => void) => {
-  const backup: Record<string, any> = {};
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (key && key.startsWith('pulau_betung_')) {
-      try {
-        backup[key] = JSON.parse(localStorage.getItem(key) || '');
-      } catch (e) {
-        backup[key] = localStorage.getItem(key);
-      }
-    }
-  }
+  const backup = collectTenantLocalBackup();
   const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

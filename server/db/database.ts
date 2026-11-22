@@ -478,6 +478,13 @@ export function getDb(): DatabaseSchema {
 let syncDebounceTimer: NodeJS.Timeout | null = null;
 
 export function saveDb(db: DatabaseSchema): void {
+  if (
+    process.env.MULTI_TENANT_ROUTING === 'true' ||
+    process.env.MIGRATION_PHASE === 'PHASE_3_SUPABASE_ONLY'
+  ) {
+    console.warn('⚠️ [LEGACY-JSON-BLOCKED]: saveDb diabaikan karena mode Multi-Tenant atau PHASE_3_SUPABASE_ONLY aktif.');
+    return;
+  }
   if (process.env.NODE_ENV === 'production') {
     console.warn('⚠️ CRITICAL WARNING: Using ephemeral JSON file storage in production. Data WILL BE LOST on container restart!');
   }
@@ -487,8 +494,8 @@ export function saveDb(db: DatabaseSchema): void {
   fs.writeFileSync(tempFile, JSON.stringify(db, null, 2), 'utf-8');
   fs.renameSync(tempFile, DB_FILE);
 
-  // Dual-Write / Sync ke Supabase jika dalam PHASE_2_DUAL_WRITE atau PHASE_3_SUPABASE_ONLY
-  if (process.env.MIGRATION_PHASE === 'PHASE_2_DUAL_WRITE' || process.env.MIGRATION_PHASE === 'PHASE_3_SUPABASE_ONLY') {
+  // Dual-Write / Sync ke Supabase hanya pada single-tenant PHASE_2_DUAL_WRITE
+  if (process.env.MIGRATION_PHASE === 'PHASE_2_DUAL_WRITE') {
     if (syncDebounceTimer) clearTimeout(syncDebounceTimer);
     syncDebounceTimer = setTimeout(() => {
       executeDualWriteSync(db).catch((err) => {

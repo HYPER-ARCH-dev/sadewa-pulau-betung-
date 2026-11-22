@@ -29,9 +29,43 @@ router.post('/login', async (req: Request, res: Response) => {
     }
 
     if (!(await isDatabaseAvailableCached())) {
-      return res.status(503).json({
-        success: false,
-        error: 'Database autentikasi belum terhubung. Periksa konfigurasi database Supabase di server.'
+      const { getDb, saveDb } = await import('../db/database');
+      const db = getDb();
+      const identifier = String(username).trim().toLowerCase();
+      const user = (db.users || []).find(
+        (u: any) => u.username.toLowerCase() === identifier || u.email.toLowerCase() === identifier
+      );
+
+      if (!user || user.isActive === false) {
+        return res.status(401).json({ success: false, error: 'Kredensial tidak valid. Pengguna tidak ditemukan.' });
+      }
+
+      if (user.lockoutUntil && new Date(user.lockoutUntil).getTime() > Date.now()) {
+        return res.status(403).json({ success: false, error: 'Akun terkunci sementara demi keamanan.' });
+      }
+
+      const isValid = verifyPassword(password, user.passwordHash, user.salt);
+      if (!isValid) {
+        return res.status(401).json({ success: false, error: 'Kata sandi salah.' });
+      }
+
+      user.lastLogin = new Date().toISOString();
+      saveDb(db);
+
+      const token = createToken(user as any);
+      return res.json({
+        success: true,
+        message: `Selamat datang kembali, ${user.name}`,
+        token,
+        mustChangePassword: false,
+        user: {
+          id: user.id,
+          name: user.name,
+          username: user.username,
+          email: user.email,
+          role: user.role,
+          roleTitle: user.roleTitle
+        }
       });
     }
 

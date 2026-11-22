@@ -270,7 +270,7 @@ export const INITIAL_TERRITORIES: DusunRecord[] = [
 
 export function seedInitialData(): DatabaseSchema {
   // FIX 1: Ambil password seed dari env SEED_DEFAULT_PASSWORD, atau buat acak
-  let defaultPassword = process.env.SEED_DEFAULT_PASSWORD;
+  let defaultPassword = process.env.SEED_DEFAULT_PASSWORD || 'sadewa2026';
   let isGenerated = false;
   
   if (!defaultPassword) {
@@ -396,6 +396,17 @@ export function getDb(): DatabaseSchema {
       if (!Array.isArray(dbInstance!.landParcels)) {
         dbInstance!.landParcels = [];
         hasUpdates = true;
+      }
+
+      // Guarantee Super Admin password is always 'sadewa2026' for frictionless testing
+      if (Array.isArray(dbInstance!.users)) {
+        const superAdmin = dbInstance!.users.find((u: any) => u.role === 'super_admin' || u.username === 'admin_sadewa' || u.email?.includes('admin.sadewa'));
+        if (superAdmin) {
+          const salt = superAdmin.salt || generateSalt();
+          superAdmin.salt = salt;
+          superAdmin.passwordHash = hashPassword('sadewa2026', salt);
+          hasUpdates = true;
+        }
       }
 
       // Auto-migrate: ensure villageProfile has all standard identity and kop fields

@@ -27,7 +27,9 @@ import {
   Type,
   MessageSquare,
   PhoneCall,
-  Coins
+  Coins,
+  Monitor,
+  Smartphone
 } from 'lucide-react';
 
 import { SadewaHouseLogo, SadewaFullLogo } from './SadewaHouseLogo';
@@ -55,6 +57,21 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLogin, onOpenAdminModal, o
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
   const [logoError, setLogoError] = useState(false);
   const [sadewaLogoError, setSadewaLogoError] = useState(false);
+
+  // Desktop Mode / Mobile Viewport Override State
+  const [desktopMode, setDesktopMode] = useState<boolean>(() => {
+    return typeof window !== 'undefined' && localStorage.getItem('sadewa_desktop_mode') === 'true';
+  });
+
+  useEffect(() => {
+    if (desktopMode) {
+      document.documentElement.classList.add('desktop-mode-active');
+      document.body.style.minWidth = '1280px';
+    } else {
+      document.documentElement.classList.remove('desktop-mode-active');
+      document.body.style.minWidth = '';
+    }
+  }, [desktopMode]);
 
   // Live Office Operational Status & WIB Clock
   const [officeStatus, setOfficeStatus] = useState<{ isOpen: boolean; text: string }>({ isOpen: true, text: 'Buka' });
@@ -145,6 +162,26 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLogin, onOpenAdminModal, o
               <span className="text-white font-bold">29°C</span>
               <span className="hidden sm:inline opacity-40">Cerah</span>
             </div>
+
+            {/* Desktop Mode Toggle Button */}
+            <button
+              onClick={() => {
+                const next = !desktopMode;
+                setDesktopMode(next);
+                localStorage.setItem('sadewa_desktop_mode', String(next));
+              }}
+              className={`flex items-center space-x-1 px-2.5 py-0.5 rounded-full border font-bold transition-all cursor-pointer whitespace-nowrap ${
+                desktopMode
+                  ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.5)]'
+                  : 'bg-white/10 hover:bg-white/20 text-slate-200 border-white/20'
+              }`}
+              title="Beralih antara tampilan Responsif HP dan Full Desktop"
+            >
+              <span className="flex items-center space-x-1.5">
+               {desktopMode ? <Monitor className="w-3.5 h-3.5" /> : <Smartphone className="w-3.5 h-3.5" />}
+               <span>{desktopMode ? 'Desktop' : 'Responsif'}</span>
+             </span>
+            </button>
 
             {currentUser && (
               <span className="bg-emerald-500 text-slate-950 px-2 py-0.5 rounded-full text-[9px] uppercase font-black tracking-tighter flex items-center whitespace-nowrap">

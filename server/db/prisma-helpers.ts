@@ -339,54 +339,92 @@ export async function getAiContext() {
   };
 
   try {
-    if (!(await isDatabaseAvailableCached())) {
-      return emptyContext;
+    if (await isDatabaseAvailableCached()) {
+      const p = getPrisma();
+      const [profile, services, latestNews, budget, officials, umkm] = await Promise.all([
+        p.villageProfile.findFirst().catch(() => null),
+        p.villageService.findMany({
+          where: { isActive: true },
+          select: { name: true, category: true, requirements: true, estimatedDays: true },
+          take: 10
+        }).catch(() => []),
+        p.newsItem.findMany({
+          where: { isPublished: true },
+          orderBy: { publishedAt: 'desc' },
+          take: 5,
+          select: { title: true, category: true }
+        }).catch(() => []),
+        p.budgetYearData.findFirst({
+          orderBy: { year: 'desc' }
+        }).catch(() => null),
+        p.villageOfficial.findMany({
+          select: { name: true, position: true },
+          take: 8
+        }).catch(() => []),
+        p.umkmItem.findMany({
+          select: { name: true, category: true, priceRange: true, phone: true },
+          take: 5
+        }).catch(() => [])
+      ]);
+
+      return {
+        profile: profile || null,
+        services: Array.isArray(services) ? services : [],
+        servicesCount: Array.isArray(services) ? services.length : 0,
+        latestNews: Array.isArray(latestNews) ? latestNews : [],
+        budget: budget || null,
+        officials: Array.isArray(officials) ? officials : [],
+        umkm: Array.isArray(umkm) ? umkm : []
+      };
     }
-
-    const p = getPrisma();
-    const [profile, services, latestNews, budget, officials, umkm] = await Promise.all([
-      p.villageProfile.findFirst().catch(() => null),
-      p.villageService.findMany({
-        where: { isActive: true },
-        select: { name: true, category: true, requirements: true, estimatedDays: true },
-        take: 10
-      }).catch(() => []),
-      p.newsItem.findMany({
-        where: { isPublished: true },
-        orderBy: { publishedAt: 'desc' },
-        take: 5,
-        select: { title: true, category: true }
-      }).catch(() => []),
-      p.budgetYearData.findFirst({
-        orderBy: { year: 'desc' }
-      }).catch(() => null),
-      p.villageOfficial.findMany({
-        select: { name: true, position: true },
-        take: 8
-      }).catch(() => []),
-      p.umkmItem.findMany({
-        select: { name: true, category: true, priceRange: true, phone: true },
-        take: 5
-      }).catch(() => [])
-    ]);
-
-    return {
-      profile: profile || null,
-      services: Array.isArray(services) ? services : [],
-      servicesCount: Array.isArray(services) ? services.length : 0,
-      latestNews: Array.isArray(latestNews) ? latestNews : [],
-      budget: budget || null,
-      officials: Array.isArray(officials) ? officials : [],
-      umkm: Array.isArray(umkm) ? umkm : []
-    };
   } catch (error: any) {
     const safeMsg = sanitizeDiagnosticMessage(error?.message || 'AI context fallback', [
       process.env.DATABASE_URL,
       process.env.DIRECT_URL
     ]);
-    console.log('ℹ️ [AI-CONTEXT] Pakai konteks lokal aman:', safeMsg);
-    return emptyContext;
+    console.log('ℹ️ [AI-CONTEXT] Prisma query gagal, mencoba fallback lokal:', safeMsg);
   }
+
+  // Fallback ke JSON lokal jika diizinkan
+  if (isJsonFallbackAllowed()) {
+    try {
+      const { getDb } = await import('./database');
+      const db = getDb();
+      const servicesList = (db.services || []).filter((s: any) => s.isActive !== false);
+      const newsList = (db.news || []).filter((n: any) => n.isPublished !== false);
+      const officialsList = (db.officials || []).filter((o: any) => o.isActive !== false);
+
+      return {
+        profile: db.villageProfile || null,
+        services: servicesList.slice(0, 10).map((s: any) => ({
+          name: s.name,
+          category: s.category,
+          requirements: s.requirements,
+          estimatedDays: s.estimatedDays
+        })),
+        servicesCount: servicesList.length,
+        latestNews: newsList.slice(0, 5).map((n: any) => ({
+          title: n.title,
+          category: n.category
+        })),
+        budget: db.budget || null,
+        officials: officialsList.slice(0, 8).map((o: any) => ({
+          name: o.name,
+          position: o.position
+        })),
+        umkm: (db.umkm || []).slice(0, 5).map((u: any) => ({
+          name: u.name,
+          category: u.category,
+          priceRange: u.priceRange,
+          phone: u.phone
+        }))
+      };
+    } catch (jsonErr: any) {
+      console.warn('⚠️ [AI-CONTEXT] Gagal memuat fallback JSON:', jsonErr?.message || jsonErr);
+    }
+  }
+
+  return emptyContext;
 }
 
 // ============================================================================

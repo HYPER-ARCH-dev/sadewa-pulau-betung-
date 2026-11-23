@@ -10,7 +10,7 @@
 
 import express from 'express';
 import { GoogleGenAI, FunctionDeclaration, Type } from '@google/genai';
-import { getAiContext, getUserById, getPrisma } from '../db/prisma-helpers';
+import { getAiContext, getUserById, getPrisma, isDatabaseAvailableCached, isJsonFallbackAllowed } from '../db/prisma-helpers';
 import { verifyToken } from '../auth';
 
 const router = express.Router();
@@ -242,24 +242,44 @@ ATURAN MENJAWAB:
           const call = functionCalls[0];
           if (call.name === 'trackDocument') {
             const { trackingCode } = call.args as any;
-            const prisma = getPrisma();
-            
-            // Cari data surat di tabel ServiceRequest berdasarkan trackingCode (scoped ke tenant aktif)
-            const requestItem = await prisma.serviceRequest.findFirst({
-              where: { trackingCode: trackingCode.trim().toUpperCase() }
-            });
+            const cleanCode = (trackingCode || '').trim().toUpperCase();
+            let requestItem: any = null;
+
+            try {
+              if (await isDatabaseAvailableCached()) {
+                const prisma = getPrisma();
+                requestItem = await prisma.serviceRequest.findFirst({
+                  where: { trackingCode: cleanCode }
+                }).catch(() => null);
+              } else if (isJsonFallbackAllowed()) {
+                const { getDb } = await import('../db/database');
+                const db = getDb();
+                requestItem = (db.serviceRequests || []).find((r: any) =>
+                  r.trackingCode && r.trackingCode.trim().toUpperCase() === cleanCode
+                ) || null;
+              }
+            } catch (err: any) {
+              console.warn('⚠️ [AI-TRACK] Gagal mencari resi surat:', err?.message || err);
+            }
 
             let toolResult = '';
             if (requestItem) {
+              // Sanitasi nama pemohon agar tidak membocorkan informasi pribadi secara utuh (misal: Budi Santoso -> Budi S.)
+              const rawName = requestItem.citizenName || 'Warga Pemohon';
+              const nameParts = rawName.split(' ');
+              const maskedName = nameParts.length > 1
+                ? `${nameParts[0]} ${nameParts[1][0]}.`
+                : `${rawName.slice(0, 3)}...`;
+
               toolResult = `DATA DITEMUKAN:
 - Jenis Surat: ${requestItem.serviceName}
-- Pemohon: ${requestItem.citizenName}
-- Status: ${requestItem.status.toUpperCase()}
-- Tanggal Pengajuan: ${requestItem.requestDate}
+- Pemohon: ${maskedName}
+- Status: ${String(requestItem.status || 'DIAJUKAN').toUpperCase()}
+- Tanggal Pengajuan: ${requestItem.requestDate ? String(requestItem.requestDate).substring(0, 10) : '-'}
 - No Surat Resmi: ${requestItem.officialLetterNumber || 'Belum Terbit'}
 - Catatan Petugas: ${requestItem.staffNotes || '-'}`;
             } else {
-              toolResult = `DATA TIDAK DITEMUKAN untuk resi ${trackingCode}.`;
+              toolResult = `RECORD_NOT_FOUND: Data permohonan surat dengan nomor resi ${trackingCode} tidak ditemukan di sistem.`;
             }
 
             // Kembalikan data hasil database ke AI agar dirangkum jadi kalimat bahasa manusia yang santai

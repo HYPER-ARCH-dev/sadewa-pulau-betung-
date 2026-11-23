@@ -269,25 +269,21 @@ export const INITIAL_TERRITORIES: DusunRecord[] = [
 ];
 
 export function seedInitialData(): DatabaseSchema {
-  // FIX 1: Ambil password seed dari env SEED_DEFAULT_PASSWORD, atau buat acak
-  let defaultPassword = process.env.SEED_DEFAULT_PASSWORD || 'sadewa2026';
-  let isGenerated = false;
-  
+  const defaultPassword = process.env.SEED_DEFAULT_PASSWORD?.trim();
+
   if (!defaultPassword) {
-    defaultPassword = crypto.randomBytes(6).toString('hex'); // 12 chars hex
-    isGenerated = true;
+    if (process.env.NODE_ENV === 'production' || process.env.MIGRATION_PHASE === 'PHASE_3_SUPABASE_ONLY' || process.env.MULTI_TENANT_ROUTING === 'true') {
+      throw new Error('FATAL SECURITY ERROR: "SEED_DEFAULT_PASSWORD" must be defined in Environment Variables/Secrets for production or multi-tenant deployment.');
+    }
+    console.warn('⚠️ [SECURITY WARNING]: SEED_DEFAULT_PASSWORD belum diset di environment. Menggunakan password default development.');
   }
 
-  if (isGenerated) {
-    console.log('--------------------------------------------------');
-    console.log('🛡️ SECURITY: Generated random seed password:', defaultPassword);
-    console.log('--------------------------------------------------');
-  }
+  const effectivePassword = defaultPassword || 'sadewa2026';
 
   // Create default password hash for initial users
   const seededUsers: UserRecord[] = INITIAL_USERS.map((u) => {
     const salt = generateSalt();
-    const passwordHash = hashPassword(defaultPassword!, salt);
+    const passwordHash = hashPassword(effectivePassword, salt);
     return {
       id: u.id,
       name: u.name,
@@ -398,16 +394,8 @@ export function getDb(): DatabaseSchema {
         hasUpdates = true;
       }
 
-      // Guarantee Super Admin password is always 'sadewa2026' for frictionless testing
-      if (Array.isArray(dbInstance!.users)) {
-        const superAdmin = dbInstance!.users.find((u: any) => u.role === 'super_admin' || u.username === 'admin_sadewa' || u.email?.includes('admin.sadewa'));
-        if (superAdmin) {
-          const salt = superAdmin.salt || generateSalt();
-          superAdmin.salt = salt;
-          superAdmin.passwordHash = hashPassword('sadewa2026', salt);
-          hasUpdates = true;
-        }
-      }
+      // Catatan: Password admin awal hanya diatur saat pembuatan pertama melalui seedInitialData.
+      // Blok auto-overwrite password dihapus agar password admin yang sudah diubah tidak pernah ditimpa.
 
       // Auto-migrate: ensure villageProfile has all standard identity and kop fields
       if (!dbInstance!.villageProfile) {

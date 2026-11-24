@@ -533,16 +533,16 @@ export const AdminDashboard: React.FC = () => {
               {/* Dual Logo Branding for Admin Topbar - SEPARATED PATHS */}
               <div className="flex items-center gap-3">
                 {/* Path 1: Village Identity */}
-                <div className="w-9 h-9 rounded-xl bg-white/10 flex items-center justify-center p-1.5 border border-white/5 shadow-inner">
+                <div className="flex items-center">
                   {villageLogo && villageLogo.length > 10 && !villageImgError ? (
                     <img 
                       src={villageLogo} 
                       alt="Logo Desa" 
-                      className="w-full h-full object-contain" 
+                      className="w-8 h-8 object-contain" 
                       onError={() => setVillageImgError(true)}
                     />
                   ) : (
-                    <ShieldCheck className="w-5 h-5 text-emerald-400" />
+                    <ShieldCheck className="w-6 h-6 text-emerald-400" />
                   )}
                 </div>
                 

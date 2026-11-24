@@ -481,31 +481,40 @@ const MainContent: React.FC = () => {
           <motion.div 
             exit={{ opacity: 0 }}
             transition={{ duration: 0.5 }}
-            className="fixed inset-0 z-[9999] bg-white flex flex-col items-center justify-center p-8"
+            className="fixed inset-0 z-[9999] bg-white flex flex-col items-center justify-center p-4 sm:p-8"
           >
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ duration: 0.8 }}
-              className="flex flex-col items-center w-full max-w-3xl"
+              className="flex flex-col items-center w-full max-w-2xl px-2 text-center"
             >
               {logoUrl ? (
                 <img 
                   src={logoUrl} 
                   alt="SADEWA Logo" 
-                  className="w-full max-w-[550px] h-auto object-contain"
+                  className="w-full max-w-[240px] sm:max-w-[380px] md:max-w-[460px] h-auto object-contain px-2"
                   referrerPolicy="no-referrer"
                 />
               ) : (
-                <SadewaFullLogo 
-                  size={110} 
-                  variant="horizontal"
-                  className="scale-110 sm:scale-125"
-                />
+                <>
+                  <div className="block sm:hidden w-full px-2 flex justify-center">
+                    <SadewaFullLogo 
+                      size={54} 
+                      variant="vertical"
+                    />
+                  </div>
+                  <div className="hidden sm:block">
+                    <SadewaFullLogo 
+                      size={90} 
+                      variant="horizontal"
+                    />
+                  </div>
+                </>
               )}
 
-              <div className="mt-20 flex flex-col items-center">
-                <AnimatedLoadingBar className="w-48 mb-3" />
+              <div className="mt-12 sm:mt-16 flex flex-col items-center">
+                <AnimatedLoadingBar className="w-40 sm:w-48 mb-3" />
                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.4em]">Memuat Data...</span>
               </div>
             </motion.div>

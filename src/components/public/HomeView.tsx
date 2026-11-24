@@ -22,7 +22,6 @@ import {
   TrendingUp,
   Download,
   Users,
-  Compass,
   ShoppingBag,
   LayoutDashboard,
   Lock,
@@ -44,6 +43,7 @@ import { useResidents } from '../../hooks/useResidents';
 import { HomeApbdesSection } from '../transparency/HomeApbdesSection';
 import { DashboardStats } from './DashboardStats';
 import { OfficialsSpotlightCard } from './OfficialsSpotlightCard';
+import { QuickStandaloneNav } from './QuickStandaloneNav';
 import defaultHeroImgAsset from '../../assets/images/modern_village_portal_hero_1790274565982.jpg';
 
 export const HomeView: React.FC = () => {
@@ -818,35 +818,8 @@ export const HomeView: React.FC = () => {
           </motion.div>
         </div>
 
-        {/* Quick Icon Links (Modern Rounded Squares) */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 gap-4 pt-4">
-          {[
-            { id: 'pembangunan', label: 'Infrastruktur', icon: Building2, desc: 'Progres Fisik' },
-            { id: 'umkm', label: 'Katalog UMKM', icon: ShoppingBag, desc: 'Produk Lokal' },
-            { id: 'peta', label: 'Peta Fasilitas', icon: Compass, desc: 'Sarana Umum' },
-            { id: 'berita', label: 'Warta Desa', icon: Newspaper, desc: 'Kabar Terkini' }
-          ].map((item, idx) => (
-            <motion.button
-              key={item.id}
-              initial={{ opacity: 0, y: 20 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.5, delay: idx * 0.1, ease: "easeOut" }}
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              onClick={() => navigateTo(item.id as any)}
-              className="flex items-center p-5 rounded-[2rem] bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-800/60 shadow-sm hover:shadow-xl hover:border-emerald-500/30 transition-all text-left space-x-4 cursor-pointer group"
-            >
-              <div className="w-12 h-12 rounded-2xl bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 flex items-center justify-center shrink-0 shadow-inner group-hover:bg-emerald-600 group-hover:text-white transition-colors">
-                <item.icon className="w-5 h-5" />
-              </div>
-              <div className="min-w-0">
-                <div className="text-xs lg:text-sm font-black text-slate-900 dark:text-white tracking-tight truncate">{item.label}</div>
-                <div className="text-[10px] text-slate-400 font-medium uppercase tracking-widest truncate">{item.desc}</div>
-              </div>
-            </motion.button>
-          ))}
-        </div>
+        {/* Quick Standalone Floating Icon Navigation (4 Menu Utama) */}
+        <QuickStandaloneNav onNavigate={navigateTo} />
       </motion.section>
 
       {/* ========================================================================= */}

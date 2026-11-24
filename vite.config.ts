@@ -16,13 +16,13 @@ export default defineConfig(() => {
           maximumFileSizeToCacheInBytes: 5000000,
           runtimeCaching: [
             {
-              urlPattern: /^https:\/\/tile\.openstreetmap\.org\/.*/i,
-              handler: 'CacheFirst',
+              urlPattern: /^https:\/\/tiles\.openfreemap\.org\/.*/i,
+              handler: 'StaleWhileRevalidate',
               options: {
-                cacheName: 'osm-tiles',
+                cacheName: 'openfreemap-vector-tiles',
                 expiration: {
-                  maxEntries: 500,
-                  maxAgeSeconds: 60 * 60 * 24 * 30, // 30 Days
+                  maxEntries: 300,
+                  maxAgeSeconds: 60 * 60 * 24 * 14, // 14 Days
                 },
                 cacheableResponse: {
                   statuses: [0, 200],
@@ -30,13 +30,13 @@ export default defineConfig(() => {
               },
             },
             {
-              urlPattern: /^https:\/\/server\.arcgisonline\.com\/ArcGIS\/rest\/services\/World_Imagery\/MapServer\/tile\/.*/i,
+              urlPattern: /^https:\/\/tile\.openstreetmap\.org\/.*/i,
               handler: 'CacheFirst',
               options: {
-                cacheName: 'satellite-tiles',
+                cacheName: 'osm-fallback-tiles',
                 expiration: {
-                  maxEntries: 500,
-                  maxAgeSeconds: 60 * 60 * 24 * 30, // 30 Days
+                  maxEntries: 250,
+                  maxAgeSeconds: 60 * 60 * 24 * 7, // 7 Days
                 },
                 cacheableResponse: {
                   statuses: [0, 200],
@@ -91,7 +91,7 @@ export default defineConfig(() => {
           manualChunks: {
             'vendor-react': ['react', 'react-dom'],
             'vendor-ui': ['lucide-react', 'motion'],
-            'vendor-map': ['leaflet'],
+            'vendor-map': ['leaflet', 'maplibre-gl', '@maplibre/maplibre-gl-leaflet'],
             'vendor-charts': ['recharts'],
             'vendor-pdf': ['jspdf', 'jspdf-autotable', 'html2canvas-pro']
           }
@@ -101,9 +101,8 @@ export default defineConfig(() => {
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
-      hmr: process.env.DISABLE_HMR !== 'true',
-      // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
-      watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      hmr: false,
+      watch: null,
     },
   };
 });

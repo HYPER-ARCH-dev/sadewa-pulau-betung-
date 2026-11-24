@@ -10,6 +10,7 @@ import { useApp } from '../../context/AppContext';
 import { useToddlers } from '../../hooks/useToddlers';
 import { useResidents } from '../../hooks/useResidents';
 import { useServiceRequests } from '../../hooks/useServiceRequests';
+import { resolveMapViewport } from '../../utils/gisAdapter';
 import {
   Baby,
   Plus,
@@ -33,7 +34,7 @@ import {
 } from 'lucide-react';
 
 export const PosyanduManager: React.FC = () => {
-  const { villageProfile, territories, addToast } = useApp();
+  const { villageProfile, territories, gisBootstrap, facilities, addToast } = useApp();
   const { toddlers, loading: toddlersLoading, addToddler, updateToddler, seedInitialData: seedToddlers } = useToddlers();
   const { residents } = useResidents();
   const { serviceRequests, loading: reqLoading } = useServiceRequests();
@@ -87,7 +88,7 @@ export const PosyanduManager: React.FC = () => {
     }
   };
 
-  const [newParentDusun, setNewParentDusun] = useState('Dusun Betung Indah');
+  const [newParentDusun, setNewParentDusun] = useState(() => territories?.[0]?.name || 'Wilayah Desa');
   const [newRtRw, setNewRtRw] = useState('RT 01 / RW 01');
   const [newCoords, setNewCoords] = useState<[number, number] | null>(null);
   const [isGettingLocation, setIsGettingLocation] = useState(false);
@@ -153,6 +154,15 @@ export const PosyanduManager: React.FC = () => {
     const { zScore: zBbTb } = calculateZScoreWeightForHeight(birthWeightNum, birthHeightNum, newGender);
     const overall = evaluateOverallStatus(catTb, catBb);
 
+    const fallbackViewport = resolveMapViewport({
+      gisBootstrap,
+      villageProfile,
+      facilities,
+      toddlers
+    });
+    const fallbackLat = fallbackViewport.center[0] + (Math.random() - 0.5) * 0.008;
+    const fallbackLng = fallbackViewport.center[1] + (Math.random() - 0.5) * 0.008;
+
     const newRecord: ToddlerRecord = {
       id: `T-${Date.now().toString().slice(-4)}`,
       nik: newNik,
@@ -167,7 +177,7 @@ export const PosyanduManager: React.FC = () => {
       dusunName: newParentDusun,
       rtRw: newRtRw,
       address: `${newRtRw} ${newParentDusun}`,
-      coordinates: newCoords ? newCoords : [-1.6050 + (Math.random() - 0.5) * 0.008, 103.3500 + (Math.random() - 0.5) * 0.008],
+      coordinates: newCoords ? newCoords : [fallbackLat, fallbackLng],
       kmsCardNumber: `KIA-PB-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`,
       isInterventionTarget: catTb === 'Severely Stunted' || catTb === 'Stunted',
       measurements: [

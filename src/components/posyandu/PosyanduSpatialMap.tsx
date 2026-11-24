@@ -1,9 +1,20 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import 'maplibre-gl/dist/maplibre-gl.css';
 import { ToddlerRecord } from '../../types/posyandu';
+import { MapMode } from '../../types/webgis';
 import { useApp } from '../../context/AppContext';
-import { MapPin, Navigation, AlertTriangle, ShieldCheck, Phone, CheckCircle2, HeartHandshake, Eye } from 'lucide-react';
+import {
+  attachBasemapToLeaflet,
+  MAP_MODE_OPTIONS
+} from '../../config/mapProviderRegistry';
+import {
+  escapeHtml,
+  isValidCoordinatePair,
+  resolveMapViewport
+} from '../../utils/gisAdapter';
+import { Navigation, AlertTriangle, Phone, Eye } from 'lucide-react';
 
 interface PosyanduSpatialMapProps {
   toddlers: ToddlerRecord[];
@@ -11,28 +22,104 @@ interface PosyanduSpatialMapProps {
   onSendWhatsAppIntervention?: (toddler: ToddlerRecord) => void;
 }
 
+function buildToddlerPopupElement(
+  toddler: ToddlerRecord,
+  colorClass: string
+): HTMLElement {
+  const latest = toddler.measurements[toddler.measurements.length - 1];
+  const root = document.createElement('div');
+  root.className = 'p-3 min-w-[240px] font-sans';
+
+  const top = document.createElement('div');
+  top.className = 'flex items-center gap-2 mb-1';
+  const badge = document.createElement('span');
+  badge.className = `px-2 py-0.5 rounded text-[10px] font-bold text-white ${colorClass}`;
+  badge.textContent = latest ? latest.overallStatus : 'Belum Ditimbang';
+  const kms = document.createElement('span');
+  kms.className = 'text-[10px] text-slate-500 font-mono';
+  kms.textContent = toddler.kmsCardNumber;
+  top.appendChild(badge);
+  top.appendChild(kms);
+  root.appendChild(top);
+
+  const nameEl = document.createElement('h4');
+  nameEl.className = 'font-bold text-sm text-slate-900';
+  nameEl.textContent = toddler.name;
+  root.appendChild(nameEl);
+
+  const parentLine = document.createElement('p');
+  parentLine.className = 'text-xs text-slate-600 mt-0.5';
+  parentLine.textContent = `Usia: ${latest ? latest.ageInMonths : 0} bln • Ortu: ${toddler.parentName}`;
+  root.appendChild(parentLine);
+
+  const dusunLine = document.createElement('p');
+  dusunLine.className = 'text-[11px] text-slate-500 mt-0.5';
+  dusunLine.textContent = `Dusun: ${toddler.dusunName} (${toddler.rtRw})`;
+  root.appendChild(dusunLine);
+
+  const footer = document.createElement('div');
+  footer.className = 'mt-2 pt-2 border-t border-slate-200 text-xs flex justify-between items-center';
+  const tb = document.createElement('span');
+  tb.className = 'font-semibold text-slate-700';
+  tb.textContent = `TB: ${latest ? latest.heightCm : '-'} cm`;
+  const zscore = document.createElement('span');
+  zscore.className = 'font-mono text-slate-500';
+  zscore.textContent = `Z-Score: ${latest ? latest.zScoreHeightForAge : '-'}`;
+  footer.appendChild(tb);
+  footer.appendChild(zscore);
+  root.appendChild(footer);
+
+  return root;
+}
+
 export const PosyanduSpatialMap: React.FC<PosyanduSpatialMapProps> = ({
   toddlers,
   onSelectToddler,
   onSendWhatsAppIntervention
 }) => {
-  const { villageProfile } = useApp();
+  const { villageProfile, territories, gisBootstrap, facilities } = useApp();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
+  const basemapCleanupRef = useRef<(() => void) | null>(null);
   const markersGroupRef = useRef<L.LayerGroup | null>(null);
+  const lastViewportKeyRef = useRef<string>('');
 
   const [selectedDusun, setSelectedDusun] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
+  const [mapMode, setMapMode] = useState<MapMode>(
+    gisBootstrap?.config?.defaultMapMode || 'roadmap'
+  );
+  const [isMapReady, setIsMapReady] = useState(false);
 
-  // Center on village coords (-1.6050, 103.3500)
-  const CENTER_LAT = -1.6050;
-  const CENTER_LNG = 103.3500;
+  const viewport = useMemo(
+    () =>
+      resolveMapViewport({
+        gisBootstrap,
+        villageProfile,
+        facilities,
+        toddlers
+      }),
+    [gisBootstrap, villageProfile, facilities, toddlers]
+  );
+
+  const dusunOptions = useMemo(() => {
+    const names = new Set<string>();
+    (territories || []).forEach((d) => {
+      if (d?.name) names.add(d.name);
+    });
+    toddlers.forEach((t) => {
+      if (t?.dusunName) names.add(t.dusunName);
+    });
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [territories, toddlers]);
 
   // Filtered Toddlers
   const filteredToddlers = toddlers.filter((t) => {
     const matchesDusun = selectedDusun === 'all' || t.dusunName === selectedDusun;
     const latest = t.measurements[t.measurements.length - 1];
-    const isStunted = latest && (latest.stuntingCategory === 'Severely Stunted' || latest.stuntingCategory === 'Stunted');
+    const isStunted = Boolean(
+      latest && (latest.stuntingCategory === 'Severely Stunted' || latest.stuntingCategory === 'Stunted')
+    );
 
     let matchesStatus = true;
     if (selectedStatus === 'stunted') {
@@ -55,45 +142,85 @@ export const PosyanduSpatialMap: React.FC<PosyanduSpatialMapProps> = ({
   const normalCount = total - stuntedCount;
   const stuntingRatePct = total > 0 ? ((stuntedCount / total) * 100).toFixed(1) : '0';
 
-  const [isMapReady, setIsMapReady] = useState(false);
-
   // Leaflet Map Initialization
   useEffect(() => {
     if (typeof window === 'undefined' || !mapContainerRef.current) return;
+    if (mapInstanceRef.current) return;
 
-    if (!mapInstanceRef.current) {
-      const map = L.map(mapContainerRef.current, {
-        center: [CENTER_LAT, CENTER_LNG],
-        zoom: 15,
-        zoomControl: true,
-        scrollWheelZoom: true
-      });
+    const map = L.map(mapContainerRef.current, {
+      center: viewport.center,
+      zoom: viewport.zoom,
+      zoomControl: true,
+      scrollWheelZoom: true
+    });
 
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        maxZoom: 20,
-        subdomains: 'abcd',
-        attribution: '&copy; OpenStreetMap kontributor &copy; CARTO | Posyandu SADEWA'
-      }).addTo(map);
+    markersGroupRef.current = L.layerGroup().addTo(map);
+    mapInstanceRef.current = map;
 
-      markersGroupRef.current = L.layerGroup().addTo(map);
-      mapInstanceRef.current = map;
+    const timer = setTimeout(() => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.invalidateSize();
+        setIsMapReady(true);
+      }
+    }, 200);
 
-      const timer = setTimeout(() => {
-        if (mapInstanceRef.current) {
-          mapInstanceRef.current.invalidateSize();
-          setIsMapReady(true);
-        }
-      }, 200);
-
-      return () => {
-        clearTimeout(timer);
-        if (mapInstanceRef.current) {
-          mapInstanceRef.current.remove();
-          mapInstanceRef.current = null;
-        }
-      };
-    }
+    return () => {
+      clearTimeout(timer);
+      if (basemapCleanupRef.current) {
+        basemapCleanupRef.current();
+        basemapCleanupRef.current = null;
+      }
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+        markersGroupRef.current = null;
+      }
+    };
   }, []);
+
+  // Attach/switch basemap using mapProviderRegistry
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    if (basemapCleanupRef.current) {
+      basemapCleanupRef.current();
+      basemapCleanupRef.current = null;
+    }
+
+    const handle = attachBasemapToLeaflet(map, mapMode, {
+      customSatelliteTileUrl: gisBootstrap?.config?.customSatelliteTileUrl,
+      activeProviderId: gisBootstrap?.config?.activeProviderId
+    });
+    basemapCleanupRef.current = handle.cleanup;
+
+    return () => {
+      if (basemapCleanupRef.current) {
+        basemapCleanupRef.current();
+        basemapCleanupRef.current = null;
+      }
+    };
+  }, [
+    mapMode,
+    gisBootstrap?.config?.customSatelliteTileUrl,
+    gisBootstrap?.config?.activeProviderId
+  ]);
+
+  // Sinkronisasi viewport dinamis
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    const vpKey = `${viewport.source}:${viewport.center[0].toFixed(4)},${viewport.center[1].toFixed(4)}:${viewport.zoom}`;
+    if (lastViewportKeyRef.current === vpKey) return;
+    lastViewportKeyRef.current = vpKey;
+
+    if (viewport.leafletBounds && viewport.source === 'boundary') {
+      map.fitBounds(viewport.leafletBounds, { padding: [24, 24], maxZoom: 16 });
+    } else {
+      map.setView(viewport.center, viewport.zoom);
+    }
+  }, [viewport]);
 
   // Update Markers when filteredToddlers changes
   useEffect(() => {
@@ -102,19 +229,25 @@ export const PosyanduSpatialMap: React.FC<PosyanduSpatialMapProps> = ({
 
     markersGroupRef.current.clearLayers();
 
-    // Add Markers for Filtered Toddlers
     filteredToddlers.forEach((toddler) => {
+      if (!toddler.coordinates || !isValidCoordinatePair(toddler.coordinates[0], toddler.coordinates[1])) return;
+
       const latest = toddler.measurements[toddler.measurements.length - 1];
       const isStunted = latest && (latest.stuntingCategory === 'Severely Stunted' || latest.stuntingCategory === 'Stunted');
       const isSeverelyStunted = latest && latest.stuntingCategory === 'Severely Stunted';
 
       const colorClass = isSeverelyStunted ? 'bg-rose-600' : isStunted ? 'bg-amber-500' : 'bg-emerald-600';
-      const borderClass = isSeverelyStunted ? 'ring-4 ring-rose-300 animate-pulse' : isStunted ? 'ring-2 ring-amber-200' : 'ring-2 ring-emerald-200';
+      const borderClass = isSeverelyStunted
+        ? 'ring-4 ring-rose-300 animate-pulse'
+        : isStunted
+        ? 'ring-2 ring-amber-200'
+        : 'ring-2 ring-emerald-200';
+      const initialLetter = escapeHtml((toddler.name || '?').trim().charAt(0).toUpperCase());
 
       const customHtml = `
         <div class="relative flex items-center justify-center">
           <div class="w-8 h-8 rounded-full ${colorClass} ${borderClass} text-white flex items-center justify-center shadow-lg transform transition-transform hover:scale-125">
-            <span class="font-bold text-xs">${toddler.name.charAt(0)}</span>
+            <span class="font-bold text-xs">${initialLetter}</span>
           </div>
         </div>
       `;
@@ -127,34 +260,20 @@ export const PosyanduSpatialMap: React.FC<PosyanduSpatialMapProps> = ({
       });
 
       const marker = L.marker([toddler.coordinates[0], toddler.coordinates[1]], { icon: customIcon });
-
-      // Popup Content
-      const popupHtml = `
-        <div class="p-3 min-w-[240px] font-sans">
-          <div class="flex items-center gap-2 mb-1">
-            <span class="px-2 py-0.5 rounded text-[10px] font-bold text-white ${colorClass}">
-              ${latest ? latest.overallStatus : 'Belum Ditimbang'}
-            </span>
-            <span class="text-[10px] text-slate-500 font-mono">${toddler.kmsCardNumber}</span>
-          </div>
-          <h4 class="font-bold text-sm text-slate-900">${toddler.name}</h4>
-          <p class="text-xs text-slate-600 mt-0.5">
-            Usia: <strong>${latest ? latest.ageInMonths : 0} bln</strong> • Ortu: <strong>${toddler.parentName}</strong>
-          </p>
-          <p class="text-[11px] text-slate-500 mt-0.5">
-            Dusun: ${toddler.dusunName} (${toddler.rtRw})
-          </p>
-          <div class="mt-2 pt-2 border-t border-slate-200 text-xs flex justify-between items-center">
-            <span class="font-semibold text-slate-700">TB: ${latest ? latest.heightCm : '-'} cm</span>
-            <span class="font-mono text-slate-500">Z-Score: ${latest ? latest.zScoreHeightForAge : '-'}</span>
-          </div>
-        </div>
-      `;
-
-      marker.bindPopup(popupHtml);
+      marker.bindPopup(buildToddlerPopupElement(toddler, colorClass));
       markersGroupRef.current?.addLayer(marker);
     });
   }, [filteredToddlers, isMapReady]);
+
+  const handleRecenter = () => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    if (viewport.leafletBounds && viewport.source === 'boundary') {
+      map.fitBounds(viewport.leafletBounds, { padding: [24, 24], maxZoom: 16 });
+    } else {
+      map.setView(viewport.center, viewport.zoom);
+    }
+  };
 
   return (
     <div className="bg-white rounded-3xl border border-slate-200 p-5 sm:p-6 shadow-sm space-y-5">
@@ -172,7 +291,7 @@ export const PosyanduSpatialMap: React.FC<PosyanduSpatialMapProps> = ({
           </p>
         </div>
 
-        {/* Stats Pills */}
+        {/* Stats */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="px-3.5 py-2 rounded-2xl bg-slate-900 text-white shadow-sm text-center">
             <div className="text-[10px] font-medium text-slate-300">Total Balita</div>
@@ -199,9 +318,11 @@ export const PosyanduSpatialMap: React.FC<PosyanduSpatialMapProps> = ({
             className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs font-semibold bg-white text-slate-800 focus:ring-2 focus:ring-emerald-500"
           >
             <option value="all">Semua Dusun</option>
-            <option value="Dusun Betung Indah">Dusun Betung Indah</option>
-            <option value="Dusun Teluk Melintang">Dusun Teluk Melintang</option>
-            <option value="Dusun Seberang Jaya">Dusun Seberang Jaya</option>
+            {dusunOptions.map((dusunName) => (
+              <option key={dusunName} value={dusunName}>
+                {dusunName}
+              </option>
+            ))}
           </select>
 
           <span className="text-xs font-bold text-slate-700 ml-2">Status Gizi:</span>
@@ -235,10 +356,28 @@ export const PosyanduSpatialMap: React.FC<PosyanduSpatialMapProps> = ({
       <div className="relative rounded-2xl overflow-hidden border border-slate-200 shadow-inner h-[460px]">
         <div ref={mapContainerRef} className="w-full h-full z-10" />
 
+        {/* Basemap mode selector */}
+        <div className="absolute top-3 left-3 z-[1000] bg-white/95 backdrop-blur-md p-1 rounded-xl shadow-md border border-slate-200 flex items-center gap-1">
+          {MAP_MODE_OPTIONS.map((opt) => (
+            <button
+              key={opt.mode}
+              type="button"
+              onClick={() => setMapMode(opt.mode)}
+              className={`px-2 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                mapMode === opt.mode
+                  ? 'bg-emerald-600 text-white'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
         {/* Re-center Map Floating Button */}
         <button
           type="button"
-          onClick={() => mapInstanceRef.current?.setView([CENTER_LAT, CENTER_LNG], 15)}
+          onClick={handleRecenter}
           className="absolute top-3 right-3 z-[1000] bg-white/95 text-slate-800 p-2.5 rounded-xl shadow-md border border-slate-200 hover:bg-emerald-50 hover:text-emerald-800 transition-colors"
           title="Fokus Ulang Peta Spasial"
         >
@@ -269,9 +408,11 @@ export const PosyanduSpatialMap: React.FC<PosyanduSpatialMapProps> = ({
               >
                 <div className="flex items-start justify-between gap-2">
                   <div>
-                    <span className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase ${
-                      isStunted ? 'bg-rose-100 text-rose-800 border border-rose-300' : 'bg-emerald-100 text-emerald-800'
-                    }`}>
+                    <span
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase ${
+                        isStunted ? 'bg-rose-100 text-rose-800 border border-rose-300' : 'bg-emerald-100 text-emerald-800'
+                      }`}
+                    >
                       {latest ? latest.overallStatus : 'Belum Ditimbang'}
                     </span>
                     <h5 className="font-extrabold text-sm text-slate-900 mt-1.5">{t.name}</h5>
@@ -279,15 +420,15 @@ export const PosyanduSpatialMap: React.FC<PosyanduSpatialMapProps> = ({
                       Ortu: <span className="font-semibold">{t.parentName}</span> ({t.parentPhone})
                     </p>
                   </div>
-                  {isStunted && (
-                    <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-1" />
-                  )}
+                  {isStunted && <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-1" />}
                 </div>
 
                 <div className="mt-3 pt-2 border-t border-slate-100 grid grid-cols-2 gap-2 text-xs">
                   <div>
                     <span className="text-[10px] text-slate-500 block">Dusun / RT</span>
-                    <span className="font-bold text-slate-800">{t.dusunName} ({t.rtRw})</span>
+                    <span className="font-bold text-slate-800">
+                      {t.dusunName} ({t.rtRw})
+                    </span>
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-500 block">TB / Z-Score</span>

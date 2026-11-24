@@ -1,7 +1,22 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
 import { FacilityPoint } from '../../types';
+import { MapMode } from '../../types/webgis';
 import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+import 'maplibre-gl/dist/maplibre-gl.css';
+import {
+  attachBasemapToLeaflet,
+  MAP_MODE_OPTIONS
+} from '../../config/mapProviderRegistry';
+import {
+  buildGoogleMapsDirectionsUrl,
+  buildGoogleMapsLocationUrl,
+  escapeHtml,
+  geoJsonGeometryToLeafletPolygons,
+  isValidCoordinatePair,
+  resolveMapViewport
+} from '../../utils/gisAdapter';
 import {
   MapPin,
   Building2,
@@ -9,10 +24,10 @@ import {
   Compass,
   Navigation,
   ExternalLink,
-  Layers,
   Info,
   Map as MapIcon,
-  Grid
+  Grid,
+  Layers
 } from 'lucide-react';
 
 const MAP_CATEGORIES = [
@@ -27,56 +42,259 @@ const MAP_CATEGORIES = [
   { key: 'olahraga', label: 'Olahraga', color: '#4f46e5' }
 ];
 
+function buildFacilityPopupElement(facility: FacilityPoint, lat: number, lng: number): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.style.fontFamily = 'inherit';
+  wrap.style.fontSize = '12px';
+  wrap.style.maxWidth = '230px';
+  wrap.style.padding = '4px';
+
+  const title = document.createElement('strong');
+  title.style.fontSize = '13px';
+  title.style.color = '#0f172a';
+  title.style.display = 'block';
+  title.style.marginBottom = '4px';
+  title.textContent = facility.name;
+  wrap.appendChild(title);
+
+  const cat = document.createElement('div');
+  cat.style.fontSize = '10px';
+  cat.style.color = '#047857';
+  cat.style.textTransform = 'uppercase';
+  cat.style.fontWeight = 'bold';
+  cat.style.marginBottom = '6px';
+  cat.textContent = facility.category.replace(/_/g, ' ');
+  wrap.appendChild(cat);
+
+  if (facility.description) {
+    const desc = document.createElement('p');
+    desc.style.color = '#475569';
+    desc.style.margin = '0 0 8px 0';
+    desc.style.lineHeight = '1.4';
+    desc.textContent = facility.description;
+    wrap.appendChild(desc);
+  }
+
+  const addr = document.createElement('div');
+  addr.style.fontSize = '11px';
+  addr.style.color = '#64748b';
+  addr.style.marginBottom = '8px';
+  addr.textContent = facility.address;
+  wrap.appendChild(addr);
+
+  const link = document.createElement('a');
+  link.href = buildGoogleMapsDirectionsUrl(lat, lng);
+  link.target = '_blank';
+  link.rel = 'noreferrer noopener';
+  link.style.display = 'inline-block';
+  link.style.backgroundColor = '#047857';
+  link.style.color = '#ffffff';
+  link.style.padding = '5px 10px';
+  link.style.borderRadius = '8px';
+  link.style.textDecoration = 'none';
+  link.style.fontSize = '11px';
+  link.style.fontWeight = 'bold';
+  link.textContent = 'Buka Rute Navigasi';
+  wrap.appendChild(link);
+
+  return wrap;
+}
+
 export const VillageMapView: React.FC = () => {
-  const { facilities, villageProfile, webGisData, navigateTo } = useApp();
+  const { facilities, villageProfile, webGisData, gisBootstrap, navigateTo, addToast } = useApp();
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [viewMode, setViewMode] = useState<'interactive' | 'grid'>('interactive');
+  const [mapMode, setMapMode] = useState<MapMode>(
+    gisBootstrap?.config?.defaultMapMode || 'roadmap'
+  );
+  const [showBoundary, setShowBoundary] = useState<boolean>(
+    gisBootstrap?.config?.showVillageBoundary ?? true
+  );
+  const [providerNotice, setProviderNotice] = useState<string | null>(null);
+  const [providerLabel, setProviderLabel] = useState<string>('Peta Jalan');
   const [activeFacility, setActiveFacility] = useState<FacilityPoint | undefined>(() =>
     facilities && facilities.length > 0 ? facilities[0] : undefined
   );
 
   const safeFacilities = facilities || [];
-  const filtered =
-    selectedCategory === 'all'
-      ? safeFacilities
-      : safeFacilities.filter((f) => f.category === selectedCategory);
+  const filtered = useMemo(
+    () =>
+      selectedCategory === 'all'
+        ? safeFacilities
+        : safeFacilities.filter((f) => f.category === selectedCategory),
+    [safeFacilities, selectedCategory]
+  );
+
+  const viewport = useMemo(
+    () =>
+      resolveMapViewport({
+        gisBootstrap,
+        villageProfile,
+        facilities: safeFacilities,
+        parcels: webGisData
+      }),
+    [gisBootstrap, villageProfile, safeFacilities, webGisData]
+  );
+
+  useEffect(() => {
+    if (!activeFacility && safeFacilities.length > 0) {
+      setActiveFacility(safeFacilities[0]);
+    }
+  }, [activeFacility, safeFacilities]);
+
+  useEffect(() => {
+    if (gisBootstrap?.config?.defaultMapMode) {
+      setMapMode(gisBootstrap.config.defaultMapMode);
+    }
+    if (typeof gisBootstrap?.config?.showVillageBoundary === 'boolean') {
+      setShowBoundary(gisBootstrap.config.showVillageBoundary);
+    }
+  }, [gisBootstrap?.config?.defaultMapMode, gisBootstrap?.config?.showVillageBoundary]);
 
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const leafletMapRef = useRef<L.Map | null>(null);
+  const basemapCleanupRef = useRef<(() => void) | null>(null);
+  const overlayLayerRef = useRef<L.LayerGroup | null>(null);
   const markersRef = useRef<{ [id: string]: L.Marker | L.Polygon }>({});
+  const lastViewportKeyRef = useRef<string>('');
 
-  // Initialize and update Leaflet map
+  // Inisialisasi peta & ganti basemap dari mapProviderRegistry
   useEffect(() => {
     if (viewMode !== 'interactive' || !mapContainerRef.current) return;
 
     if (!leafletMapRef.current) {
       const map = L.map(mapContainerRef.current, {
-        center: [-1.6050, 103.3500],
-        zoom: 14,
+        center: viewport.center,
+        zoom: viewport.zoom,
         zoomControl: true,
         scrollWheelZoom: true
       });
-
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        maxZoom: 20,
-        subdomains: 'abcd',
-        attribution: '&copy; OpenStreetMap kontributor &copy; CARTO'
-      }).addTo(map);
-
       leafletMapRef.current = map;
+      overlayLayerRef.current = L.layerGroup().addTo(map);
     }
 
     const map = leafletMapRef.current;
 
-    // Clear old markers
-    (Object.values(markersRef.current) as L.Layer[]).forEach((layer) => layer.remove());
+    if (basemapCleanupRef.current) {
+      basemapCleanupRef.current();
+      basemapCleanupRef.current = null;
+    }
+
+    const handle = attachBasemapToLeaflet(map, mapMode, {
+      customSatelliteTileUrl: gisBootstrap?.config?.customSatelliteTileUrl,
+      activeProviderId: gisBootstrap?.config?.activeProviderId
+    });
+    basemapCleanupRef.current = handle.cleanup;
+    setProviderLabel(handle.provider.shortLabel);
+    setProviderNotice(handle.fallbackReason || null);
+
+    const timer = setTimeout(() => {
+      map.invalidateSize();
+    }, 150);
+
+    return () => {
+      clearTimeout(timer);
+      if (basemapCleanupRef.current) {
+        basemapCleanupRef.current();
+        basemapCleanupRef.current = null;
+      }
+    };
+  }, [
+    viewMode,
+    mapMode,
+    gisBootstrap?.config?.customSatelliteTileUrl,
+    gisBootstrap?.config?.activeProviderId
+  ]);
+
+  // Bersihkan instance Leaflet saat pindah ke grid atau unmount
+  useEffect(() => {
+    if (viewMode !== 'interactive' && leafletMapRef.current) {
+      if (basemapCleanupRef.current) {
+        basemapCleanupRef.current();
+        basemapCleanupRef.current = null;
+      }
+      leafletMapRef.current.remove();
+      leafletMapRef.current = null;
+      overlayLayerRef.current = null;
+      lastViewportKeyRef.current = '';
+    }
+  }, [viewMode]);
+
+  useEffect(() => {
+    return () => {
+      if (basemapCleanupRef.current) {
+        basemapCleanupRef.current();
+        basemapCleanupRef.current = null;
+      }
+      if (leafletMapRef.current) {
+        leafletMapRef.current.remove();
+        leafletMapRef.current = null;
+        overlayLayerRef.current = null;
+      }
+    };
+  }, []);
+
+  // Sesuaikan viewport ketika data GIS tenant / batas wilayah ter-load
+  useEffect(() => {
+    const map = leafletMapRef.current;
+    if (!map || viewMode !== 'interactive') return;
+
+    const vpKey = `${viewport.source}:${viewport.center[0].toFixed(4)},${viewport.center[1].toFixed(4)}:${viewport.zoom}`;
+    if (lastViewportKeyRef.current === vpKey) return;
+    lastViewportKeyRef.current = vpKey;
+
+    if (viewport.leafletBounds && viewport.source === 'boundary') {
+      map.fitBounds(viewport.leafletBounds, { padding: [24, 24], maxZoom: 16 });
+    } else {
+      map.setView(viewport.center, viewport.zoom);
+    }
+  }, [viewport, viewMode]);
+
+  // Render marker fasilitas, persil SPORADIK, dan garis batas wilayah desa
+  useEffect(() => {
+    const map = leafletMapRef.current;
+    const overlayGroup = overlayLayerRef.current;
+    if (viewMode !== 'interactive' || !map || !overlayGroup) return;
+
+    overlayGroup.clearLayers();
     markersRef.current = {};
 
-    // Add markers for filtered facilities
+    // 1. Render batas wilayah desa aktif (jika ada & diaktifkan)
+    if (showBoundary && gisBootstrap?.activeBoundary?.geometryGeoJson) {
+      const polygons = geoJsonGeometryToLeafletPolygons(gisBootstrap.activeBoundary.geometryGeoJson);
+      const boundaryColor = gisBootstrap.config?.boundaryColor || '#ec4899';
+      polygons.forEach((rings) => {
+        const boundaryLayer = L.polygon(rings, {
+          color: boundaryColor,
+          weight: 3,
+          dashArray: '8, 5',
+          fillColor: boundaryColor,
+          fillOpacity: 0.08
+        });
+
+        const boundaryTip = document.createElement('div');
+        const tipTitle = document.createElement('strong');
+        tipTitle.textContent = `Batas Wilayah ${villageProfile.villageName || 'Desa'}`;
+        const tipMeta = document.createElement('div');
+        tipMeta.style.fontSize = '10px';
+        tipMeta.textContent = `Status: ${
+          gisBootstrap.activeBoundary?.status === 'TERVERIFIKASI' ? 'Terverifikasi' : 'Belum Terverifikasi'
+        }`;
+        boundaryTip.appendChild(tipTitle);
+        boundaryTip.appendChild(tipMeta);
+        boundaryLayer.bindTooltip(boundaryTip, { sticky: true });
+        overlayGroup.addLayer(boundaryLayer);
+      });
+    }
+
+    // 2. Render pin fasilitas umum
     filtered.forEach((facility) => {
       if (!facility.coordinates || facility.coordinates.length < 2) return;
       const [lat, lng] = facility.coordinates;
+      if (!isValidCoordinatePair(lat, lng)) return;
+
       const catConfig = MAP_CATEGORIES.find((c) => c.key === facility.category) || { color: '#047857' };
+      const safeTitle = escapeHtml(facility.name);
 
       const markerIcon = L.divIcon({
         className: 'custom-div-marker',
@@ -84,147 +302,154 @@ export const VillageMapView: React.FC = () => {
           <div style="
             background-color: ${catConfig.color};
             color: white;
-            width: 32px;
-            height: 32px;
+            width: 30px;
+            height: 30px;
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
             border: 2px solid #ffffff;
             box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-            font-size: 15px;
             cursor: pointer;
-            transition: transform 0.2s;
-          " title="${facility.name}">
-            📍
+          " title="${safeTitle}">
+            <span style="width:10px;height:10px;border-radius:9999px;background:#ffffff;display:block;"></span>
           </div>
         `,
-        iconSize: [32, 32],
-        iconAnchor: [16, 32],
-        popupAnchor: [0, -32]
+        iconSize: [30, 30],
+        iconAnchor: [15, 15],
+        popupAnchor: [0, -16]
       });
 
-      const marker = L.marker([lat, lng], { icon: markerIcon }).addTo(map);
-
-      const popupContent = `
-        <div style="font-family: inherit; font-size: 12px; max-width: 220px; padding: 4px;">
-          <strong style="font-size: 13px; color: #0f172a; display: block; margin-bottom: 4px;">${facility.name}</strong>
-          <div style="font-size: 10px; color: #047857; text-transform: uppercase; font-weight: bold; margin-bottom: 6px;">${facility.category.replace('_', ' ')}</div>
-          <p style="color: #475569; margin: 0 0 8px 0; line-height: 1.4;">${facility.description}</p>
-          <div style="font-size: 11px; color: #64748b; margin-bottom: 6px;">📍 ${facility.address}</div>
-          <a href="https://maps.google.com/?q=${lat},${lng}" target="_blank" rel="noreferrer" style="
-            display: inline-block;
-            background-color: #047857;
-            color: white;
-            padding: 4px 10px;
-            border-radius: 8px;
-            text-decoration: none;
-            font-size: 11px;
-            font-weight: bold;
-          ">Buka Rute Navigasi</a>
-        </div>
-      `;
-
-      marker.bindPopup(popupContent);
-
+      const marker = L.marker([lat, lng], { icon: markerIcon });
+      marker.bindPopup(buildFacilityPopupElement(facility, lat, lng));
       marker.on('click', () => {
         setActiveFacility(facility);
       });
 
+      overlayGroup.addLayer(marker);
       markersRef.current[facility.id] = marker;
     });
 
-    // Render SPORADIK WebGIS Parcels (Only if not filtering by non-all)
+    // 3. Render persil SPORADIK terbit (hanya saat filter semua)
     if (selectedCategory === 'all' && webGisData && webGisData.length > 0) {
-      webGisData.forEach(parcel => {
+      webGisData.forEach((parcel) => {
         if (parcel.sporadikStatus === 'SPORADIK_TERBIT' && parcel.coordinates && parcel.coordinates.length > 2) {
           const polygon = L.polygon(parcel.coordinates, {
             color: '#10b981',
             weight: 2,
             fillColor: '#34d399',
             fillOpacity: 0.4
-          }).addTo(map);
+          });
 
-          const popupContent = document.createElement('div');
-          popupContent.innerHTML = `
-            <div style="font-family: inherit; font-size: 12px; min-width: 180px;">
-              <div style="background-color: #047857; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 10px; display: inline-block; margin-bottom: 6px;">
-                ✓ SPORADIK TERBIT
-              </div>
-              <strong style="display: block; font-size: 13px; color: #0f172a; margin-bottom: 2px;">Bidang Tanah: ${parcel.ownerName}</strong>
-              <div style="font-size: 11px; color: #475569; margin-bottom: 8px;">Luas: ${parcel.landAreaSqM} m² / ${parcel.landAreaHectares} Ha</div>
-              <button class="view-sporadik-btn" style="
-                background-color: #0f172a;
-                color: white;
-                border: none;
-                padding: 6px 12px;
-                border-radius: 6px;
-                font-size: 11px;
-                cursor: pointer;
-                width: 100%;
-                font-weight: bold;
-              ">Lihat Berkas Surat</button>
-            </div>
-          `;
+          const popupEl = document.createElement('div');
+          popupEl.style.fontFamily = 'inherit';
+          popupEl.style.fontSize = '12px';
+          popupEl.style.minWidth = '180px';
 
-          const btn = popupContent.querySelector('.view-sporadik-btn');
-          if (btn) {
-            btn.addEventListener('click', () => {
-              // Open modal or navigate
-              if (parcel.sporadikRequestCode) {
-                 navigateTo('layanan', { trackingCode: parcel.sporadikRequestCode });
-              } else {
-                 alert('Berkas SPORADIK tidak ditemukan (ID/Resi hilang).');
-              }
-            });
-          }
+          const badge = document.createElement('div');
+          badge.style.backgroundColor = '#047857';
+          badge.style.color = '#ffffff';
+          badge.style.padding = '4px 8px';
+          badge.style.borderRadius = '4px';
+          badge.style.fontWeight = 'bold';
+          badge.style.fontSize = '10px';
+          badge.style.display = 'inline-block';
+          badge.style.marginBottom = '6px';
+          badge.textContent = 'SPORADIK TERBIT';
+          popupEl.appendChild(badge);
 
-          polygon.bindPopup(popupContent);
+          const ownerEl = document.createElement('strong');
+          ownerEl.style.display = 'block';
+          ownerEl.style.fontSize = '13px';
+          ownerEl.style.color = '#0f172a';
+          ownerEl.style.marginBottom = '2px';
+          ownerEl.textContent = `Bidang Tanah: ${parcel.ownerName}`;
+          popupEl.appendChild(ownerEl);
+
+          const areaEl = document.createElement('div');
+          areaEl.style.fontSize = '11px';
+          areaEl.style.color = '#475569';
+          areaEl.style.marginBottom = '8px';
+          areaEl.textContent = `Luas: ${parcel.landAreaSqM} m² / ${parcel.landAreaHectares} Ha`;
+          popupEl.appendChild(areaEl);
+
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.style.backgroundColor = '#0f172a';
+          btn.style.color = '#ffffff';
+          btn.style.border = 'none';
+          btn.style.padding = '6px 12px';
+          btn.style.borderRadius = '6px';
+          btn.style.fontSize = '11px';
+          btn.style.cursor = 'pointer';
+          btn.style.width = '100%';
+          btn.style.fontWeight = 'bold';
+          btn.textContent = 'Lihat Berkas Surat';
+          btn.addEventListener('click', () => {
+            if (parcel.sporadikRequestCode) {
+              navigateTo('layanan', { trackingCode: parcel.sporadikRequestCode });
+            } else {
+              addToast('warning', 'Berkas Tidak Ditemukan', 'Kode resi berkas SPORADIK belum tersedia pada data persil ini.');
+            }
+          });
+          popupEl.appendChild(btn);
+
+          polygon.bindPopup(popupEl);
+          overlayGroup.addLayer(polygon);
           markersRef.current[parcel.id] = polygon;
         }
       });
     }
+  }, [filtered, viewMode, webGisData, selectedCategory, navigateTo, addToast, showBoundary, gisBootstrap, villageProfile.villageName]);
 
-    // Invalidate size in case of tab or view resize
-    const timer = setTimeout(() => {
-      map.invalidateSize();
-    }, 150);
-
-    return () => {
-      clearTimeout(timer);
-      if (leafletMapRef.current) {
-        leafletMapRef.current.remove();
-        leafletMapRef.current = null;
-      }
-    };
-  }, [filtered, viewMode, webGisData, selectedCategory, navigateTo]);
-
-  // Handle click on a facility from list
   const handleSelectFacility = (facility: FacilityPoint) => {
     setActiveFacility(facility);
     if (viewMode === 'interactive' && leafletMapRef.current && facility.coordinates && facility.coordinates.length >= 2) {
       const [lat, lng] = facility.coordinates;
-      leafletMapRef.current.flyTo([lat, lng], 16, { duration: 1.2 });
-      const marker = markersRef.current[facility.id];
-      if (marker) {
-        marker.openPopup();
+      if (isValidCoordinatePair(lat, lng)) {
+        leafletMapRef.current.flyTo([lat, lng], 16, { duration: 1.0 });
+        const marker = markersRef.current[facility.id];
+        if (marker) {
+          marker.openPopup();
+        }
       }
     }
   };
 
+  const handleRecenter = () => {
+    const map = leafletMapRef.current;
+    if (!map) return;
+    if (viewport.leafletBounds && viewport.source === 'boundary') {
+      map.fitBounds(viewport.leafletBounds, { padding: [24, 24], maxZoom: 16 });
+    } else {
+      map.setView(viewport.center, viewport.zoom);
+    }
+  };
+
+  const villageDisplayName = villageProfile.villageName || 'Desa';
+  const regionLabel = [villageProfile.district, villageProfile.regency].filter(Boolean).join(', ');
+  const externalMapQuery = [villageProfile.villageName, villageProfile.district, villageProfile.regency]
+    .filter(Boolean)
+    .join(' ');
+  const externalGoogleMapsHref = buildGoogleMapsLocationUrl(
+    viewport.isConfigured ? viewport.center[0] : null,
+    viewport.isConfigured ? viewport.center[1] : null,
+    externalMapQuery || villageDisplayName
+  );
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
       {/* Header */}
-      <div className="border-b border-slate-200 pb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="border-b border-slate-200 dark:border-slate-800 pb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <span className="text-xs font-bold text-emerald-700 tracking-wider uppercase">
+          <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400 tracking-wider uppercase">
             Geospasial & Fasilitas Umum
           </span>
-          <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight mt-1">
-            Peta Digital Fasilitas {villageProfile.villageName || 'Desa'}
+          <h1 className="text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight mt-1">
+            Peta Digital Fasilitas {villageDisplayName}
           </h1>
-          <p className="text-xs sm:text-sm text-slate-600 mt-1 max-w-2xl">
-            Informasi lokasi kantor desa, sarana pendidikan, fasilitas kesehatan, dermaga penyeberangan perahu Batang Hari, dan batas dusun.
+          <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 mt-1 max-w-2xl">
+            Informasi lokasi kantor desa, sarana pendidikan, fasilitas kesehatan, prasarana umum, dan tata batas wilayah desa secara interaktif.
           </p>
         </div>
 
@@ -240,7 +465,7 @@ export const VillageMapView: React.FC = () => {
               }`}
             >
               <MapIcon className="w-3.5 h-3.5" />
-              <span>Peta Interaktif (OSM)</span>
+              <span>Peta Interaktif</span>
             </button>
             <button
               onClick={() => setViewMode('grid')}
@@ -276,22 +501,78 @@ export const VillageMapView: React.FC = () => {
 
       {/* Main Map & Detail Panel */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Visual Map Representation */}
         <div className="lg:col-span-2 space-y-4">
           {viewMode === 'interactive' ? (
             <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm relative">
               {/* Map Bar Header */}
-              <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between">
+              <div className="px-4 sm:px-5 py-3 bg-slate-900 text-white flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center space-x-2">
                   <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
                   <span className="text-xs font-bold text-emerald-300 uppercase tracking-wider">
-                    Peta OpenStreetMap {villageProfile.villageName || 'Desa'}
+                    {providerLabel} • {villageDisplayName}
                   </span>
                 </div>
-                <span className="text-[11px] text-slate-400 font-mono">
-                  Batang Hari: -1.5284°, 103.3142°
-                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-center bg-slate-800 rounded-lg p-0.5 border border-slate-700">
+                    {MAP_MODE_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.mode}
+                        type="button"
+                        onClick={() => setMapMode(opt.mode)}
+                        className={`px-2.5 py-1 rounded-md text-[10px] font-bold transition-colors cursor-pointer ${
+                          mapMode === opt.mode
+                            ? 'bg-emerald-600 text-white'
+                            : 'text-slate-300 hover:text-white'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                  {gisBootstrap?.activeBoundary && (
+                    <button
+                      type="button"
+                      onClick={() => setShowBoundary((v) => !v)}
+                      className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition-colors flex items-center gap-1 ${
+                        showBoundary
+                          ? 'bg-pink-600/20 text-pink-200 border-pink-400/50'
+                          : 'bg-slate-800 text-slate-300 border-slate-700'
+                      }`}
+                    >
+                      <Layers className="w-3 h-3" />
+                      <span>Batas Desa</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleRecenter}
+                    className="px-2 py-1 rounded-lg text-[10px] font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
+                    title="Pusatkan Ulang Peta"
+                  >
+                    Pusatkan
+                  </button>
+                </div>
               </div>
+
+              {providerNotice && (
+                <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 text-[11px] text-amber-900 flex items-center gap-2">
+                  <Info className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                  <span>{providerNotice}</span>
+                </div>
+              )}
+
+              {!gisBootstrap?.activeBoundary && (
+                <div className="px-4 py-1.5 bg-slate-50 border-b border-slate-200 text-[11px] text-slate-600 flex items-center justify-between gap-2">
+                  <span>
+                    Garis batas poligon resmi desa belum diunggah/diverifikasi; peta menampilkan koordinat titik aktif desa.
+                  </span>
+                  {viewport.isConfigured && (
+                    <span className="hidden sm:inline font-mono text-[10px] text-slate-500 shrink-0">
+                      {viewport.center[0].toFixed(4)}°, {viewport.center[1].toFixed(4)}°
+                    </span>
+                  )}
+                </div>
+              )}
 
               {/* Leaflet container */}
               <div
@@ -302,11 +583,11 @@ export const VillageMapView: React.FC = () => {
 
               <div className="px-5 py-3 bg-slate-50 border-t border-slate-200 text-xs text-slate-600 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
                 <div className="flex items-center space-x-1.5 text-[11px] text-slate-500">
-                  <Info className="w-3.5 h-3.5 text-emerald-700" />
+                  <Info className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
                   <span>Klik pada pin untuk melihat informasi fasilitas dan petunjuk arah.</span>
                 </div>
                 <a
-                  href="https://maps.google.com/?q=Pulau+Betung+Pemayung+Batang+Hari"
+                  href={externalGoogleMapsHref}
                   target="_blank"
                   rel="noreferrer"
                   className="text-emerald-700 font-bold hover:underline flex items-center space-x-1 text-xs"
@@ -317,7 +598,6 @@ export const VillageMapView: React.FC = () => {
               </div>
             </div>
           ) : (
-            /* Grid View */
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {filtered.map((facility) => {
                 const isSelected = activeFacility?.id === facility.id;
@@ -341,7 +621,7 @@ export const VillageMapView: React.FC = () => {
                         </span>
                         <h4 className="text-sm font-bold text-slate-900 mt-1 leading-snug">{facility.name}</h4>
                         <p className="text-xs text-slate-500 mt-1 line-clamp-2">{facility.description}</p>
-                        <div className="text-[11px] text-slate-400 mt-2">📍 {facility.address}</div>
+                        <div className="text-[11px] text-slate-400 mt-2">{facility.address}</div>
                       </div>
                     </div>
                   </div>
@@ -350,10 +630,11 @@ export const VillageMapView: React.FC = () => {
             </div>
           )}
 
-          {/* Quick POI list under interactive map */}
           {viewMode === 'interactive' && (
             <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3">
-              <span className="text-xs font-bold text-slate-700 block">Pilih Cepat Titik Lokasi ({filtered.length}):</span>
+              <span className="text-xs font-bold text-slate-700 block">
+                Pilih Cepat Titik Lokasi ({filtered.length}):
+              </span>
               <div className="flex flex-wrap gap-2">
                 {filtered.map((f) => (
                   <button
@@ -397,20 +678,22 @@ export const VillageMapView: React.FC = () => {
                   {activeFacility.category.replace('_', ' ')}
                 </span>
                 <h3 className="text-lg font-bold text-slate-900 mt-1.5 leading-snug">{activeFacility.name}</h3>
-                <p className="text-xs text-slate-600 mt-1.5 leading-relaxed">
-                  {activeFacility.description}
-                </p>
+                <p className="text-xs text-slate-600 mt-1.5 leading-relaxed">{activeFacility.description}</p>
               </div>
 
               <div className="space-y-2.5 pt-3 border-t border-slate-100 text-xs text-slate-600">
                 <div className="flex items-start space-x-2">
                   <MapPin className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                  <span><strong>Alamat:</strong> {activeFacility.address}</span>
+                  <span>
+                    <strong>Alamat:</strong> {activeFacility.address}
+                  </span>
                 </div>
                 {activeFacility.contact && (
                   <div className="flex items-center space-x-2">
                     <Phone className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span><strong>Kontak:</strong> {activeFacility.contact}</span>
+                    <span>
+                      <strong>Kontak:</strong> {activeFacility.contact}
+                    </span>
                   </div>
                 )}
                 <div className="flex items-center space-x-2">
@@ -419,22 +702,27 @@ export const VillageMapView: React.FC = () => {
                     <strong>Titik Koordinat:</strong>{' '}
                     {activeFacility.coordinates && activeFacility.coordinates.length >= 2
                       ? `${activeFacility.coordinates[0]}, ${activeFacility.coordinates[1]}`
-                      : activeFacility.coordinatesLabel || '-1.5284°, 103.3142°'}
+                      : activeFacility.coordinatesLabel || 'Belum ditentukan'}
                   </span>
                 </div>
               </div>
 
-              {activeFacility.coordinates && activeFacility.coordinates.length >= 2 && (
-                <a
-                  href={`https://www.google.com/maps/dir/?api=1&destination=${activeFacility.coordinates[0]},${activeFacility.coordinates[1]}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="w-full py-2.5 px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs shadow transition-all flex items-center justify-center space-x-2 mt-2"
-                >
-                  <Navigation className="w-4 h-4" />
-                  <span>Petunjuk Arah (Navigasi GPS)</span>
-                </a>
-              )}
+              {activeFacility.coordinates &&
+                activeFacility.coordinates.length >= 2 &&
+                isValidCoordinatePair(activeFacility.coordinates[0], activeFacility.coordinates[1]) && (
+                  <a
+                    href={buildGoogleMapsDirectionsUrl(
+                      activeFacility.coordinates[0],
+                      activeFacility.coordinates[1]
+                    )}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="w-full py-2.5 px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs shadow transition-all flex items-center justify-center space-x-2 mt-2"
+                  >
+                    <Navigation className="w-4 h-4" />
+                    <span>Petunjuk Arah (Navigasi GPS)</span>
+                  </a>
+                )}
             </div>
           ) : (
             <div className="text-center py-12 text-slate-400 text-xs">
@@ -443,7 +731,9 @@ export const VillageMapView: React.FC = () => {
           )}
 
           <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-100 text-xs text-emerald-900 leading-relaxed">
-            <strong>Akses Wilayah:</strong> {villageProfile.villageName || 'Desa'} dapat ditempuh melalui {villageProfile.addressStreet || 'jalan poros utama'} ({villageProfile.district || 'Kecamatan Pemayung'}, {villageProfile.regency || 'Kabupaten Batang Hari'}).
+            <strong>Akses Wilayah:</strong> {villageDisplayName} dapat ditempuh melalui{' '}
+            {villageProfile.addressStreet || 'jalan poros utama'}
+            {regionLabel ? ` (${regionLabel})` : ''}.
           </div>
         </div>
       </div>

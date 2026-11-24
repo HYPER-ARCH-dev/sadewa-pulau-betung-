@@ -1,18 +1,28 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import 'maplibre-gl/dist/maplibre-gl.css';
 import { useApp } from '../../context/AppContext';
-import { LandParcel, DusunSpatialBoundary } from '../../types/webgis';
+import { LandParcel, DusunSpatialBoundary, MapMode } from '../../types/webgis';
 import { MapFacility } from '../../types';
 import { calculatePolygonAreaShoelace } from '../../utils/geometryEngine';
-import { Layers, MapPin, Navigation, Maximize2, Compass, Plus, Trash2, Check, RefreshCw } from 'lucide-react';
+import {
+  attachBasemapToLeaflet,
+  MAP_MODE_OPTIONS
+} from '../../config/mapProviderRegistry';
+import {
+  geoJsonGeometryToLeafletPolygons,
+  isValidCoordinatePair,
+  resolveMapViewport
+} from '../../utils/gisAdapter';
+import { Navigation, Compass, Trash2, Info } from 'lucide-react';
 
 // Fix Leaflet Default Icon path issues in Vite
 delete (L.Icon.Default.prototype as { _getIconUrl?: unknown })._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
   iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png'
 });
 
 interface WebGisMapProps {
@@ -28,6 +38,89 @@ interface WebGisMapProps {
   className?: string;
 }
 
+function buildParcelPopupElement(
+  parcel: LandParcel,
+  onSelectParcel?: (parcel: LandParcel | null) => void
+): HTMLElement {
+  const root = document.createElement('div');
+  root.className = 'p-1 max-w-xs font-sans text-slate-800';
+
+  const topRow = document.createElement('div');
+  topRow.className = 'flex items-center justify-between pb-1.5 mb-1.5 border-b border-slate-200 gap-2';
+
+  const nopBadge = document.createElement('span');
+  nopBadge.className = 'text-[10px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-slate-100 text-slate-700';
+  nopBadge.textContent = `NOP: ${parcel.nop}`;
+  topRow.appendChild(nopBadge);
+
+  const pbbBadge = document.createElement('span');
+  pbbBadge.className = `text-[10px] font-bold px-1.5 py-0.5 rounded ${
+    parcel.pbbStatus === 'LUNAS' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+  }`;
+  pbbBadge.textContent = parcel.pbbStatus;
+  topRow.appendChild(pbbBadge);
+  root.appendChild(topRow);
+
+  const ownerEl = document.createElement('h4');
+  ownerEl.className = 'font-bold text-xs text-slate-900 leading-snug';
+  ownerEl.textContent = parcel.ownerName;
+  root.appendChild(ownerEl);
+
+  const dusunEl = document.createElement('p');
+  dusunEl.className = 'text-[11px] text-slate-500 mt-0.5';
+  dusunEl.textContent = parcel.addressDusun;
+  root.appendChild(dusunEl);
+
+  const statsGrid = document.createElement('div');
+  statsGrid.className = 'grid grid-cols-2 gap-1 my-2 text-[10px] bg-slate-50 p-2 rounded-lg border border-slate-100';
+
+  const areaBox = document.createElement('div');
+  const areaLbl = document.createElement('span');
+  areaLbl.className = 'text-slate-400 block';
+  areaLbl.textContent = 'Luas Tanah (Shoelace):';
+  const areaVal = document.createElement('strong');
+  areaVal.className = 'text-slate-800 font-bold';
+  areaVal.textContent = `${parcel.landAreaSqM.toLocaleString('id-ID')} m²`;
+  areaBox.appendChild(areaLbl);
+  areaBox.appendChild(areaVal);
+  statsGrid.appendChild(areaBox);
+
+  const pbbBox = document.createElement('div');
+  const pbbLbl = document.createElement('span');
+  pbbLbl.className = 'text-slate-400 block';
+  pbbLbl.textContent = 'Tagihan PBB-P2:';
+  const pbbVal = document.createElement('strong');
+  pbbVal.className = 'text-emerald-700 font-bold';
+  pbbVal.textContent = `Rp ${parcel.pbbTaxAmount.toLocaleString('id-ID')}`;
+  pbbBox.appendChild(pbbLbl);
+  pbbBox.appendChild(pbbVal);
+  statsGrid.appendChild(pbbBox);
+  root.appendChild(statsGrid);
+
+  const sporadikRow = document.createElement('div');
+  sporadikRow.className = 'text-[10px] text-slate-600 mb-2';
+  const sporadikPrefix = document.createElement('strong');
+  sporadikPrefix.textContent = 'SPORADIK: ';
+  const sporadikVal = document.createElement('span');
+  sporadikVal.className = 'font-semibold text-blue-700';
+  sporadikVal.textContent = parcel.sporadikStatus.replace(/_/g, ' ');
+  sporadikRow.appendChild(sporadikPrefix);
+  sporadikRow.appendChild(sporadikVal);
+  root.appendChild(sporadikRow);
+
+  const actionBtn = document.createElement('button');
+  actionBtn.type = 'button';
+  actionBtn.className =
+    'w-full py-1 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-bold transition-colors shadow-2xs';
+  actionBtn.textContent = 'Lihat Detail & SPORADIK';
+  actionBtn.addEventListener('click', () => {
+    onSelectParcel?.(parcel);
+  });
+  root.appendChild(actionBtn);
+
+  return root;
+}
+
 export const WebGisMap: React.FC<WebGisMapProps> = ({
   parcels,
   dusunBoundaries,
@@ -40,50 +133,56 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
   height = '500px',
   className = ''
 }) => {
-  const { villageProfile } = useApp();
+  const { villageProfile, gisBootstrap } = useApp();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
+  const basemapCleanupRef = useRef<(() => void) | null>(null);
   const layersGroupRef = useRef<L.LayerGroup | null>(null);
   const drawingLayerRef = useRef<L.LayerGroup | null>(null);
+  const lastViewportKeyRef = useRef<string>('');
 
-  const [activeTile, setActiveTile] = useState<'osm' | 'satellite'>('osm');
+  const [mapMode, setMapMode] = useState<MapMode>(
+    gisBootstrap?.config?.defaultMapMode || 'roadmap'
+  );
+  const [providerNotice, setProviderNotice] = useState<string | null>(null);
+  const [showVillageBounds, setShowVillageBounds] = useState<boolean>(
+    gisBootstrap?.config?.showVillageBoundary ?? true
+  );
   const [showDusunBounds, setShowDusunBounds] = useState(true);
   const [showFacilities, setShowFacilities] = useState(true);
 
-  // Pusat Peta Desa Pulau Betung (-1.6050, 103.3500)
-  const CENTER_LAT = -1.6050;
-  const CENTER_LNG = 103.3500;
-  const DEFAULT_ZOOM = 15;
+  const viewport = useMemo(
+    () =>
+      resolveMapViewport({
+        gisBootstrap,
+        villageProfile,
+        facilities,
+        parcels
+      }),
+    [gisBootstrap, villageProfile, facilities, parcels]
+  );
+
+  useEffect(() => {
+    if (gisBootstrap?.config?.defaultMapMode) {
+      setMapMode(gisBootstrap.config.defaultMapMode);
+    }
+    if (typeof gisBootstrap?.config?.showVillageBoundary === 'boolean') {
+      setShowVillageBounds(gisBootstrap.config.showVillageBoundary);
+    }
+  }, [gisBootstrap?.config?.defaultMapMode, gisBootstrap?.config?.showVillageBoundary]);
 
   // Inisialisasi Peta Leaflet
   useEffect(() => {
     if (!mapContainerRef.current) return;
-    if (mapInstanceRef.current) return; // Mencegah re-initialization
+    if (mapInstanceRef.current) return;
 
     const map = L.map(mapContainerRef.current, {
-      center: [CENTER_LAT, CENTER_LNG],
-      zoom: DEFAULT_ZOOM,
+      center: viewport.center,
+      zoom: viewport.zoom,
       zoomControl: false
     });
 
     L.control.zoom({ position: 'bottomright' }).addTo(map);
-
-    // Layer Ubin Vektor CartoDB Voyager vs Esri World Imagery (Satelit)
-    const vectorLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-      maxZoom: 20,
-      subdomains: 'abcd',
-      attribution: '&copy; OpenStreetMap contributors &copy; CARTO | SADEWA WebGIS'
-    });
-
-    const satLayer = L.tileLayer(
-      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      {
-        maxZoom: 19,
-        attribution: 'Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community'
-      }
-    );
-
-    vectorLayer.addTo(map);
 
     const layersGroup = L.layerGroup().addTo(map);
     const drawingLayer = L.layerGroup().addTo(map);
@@ -92,44 +191,66 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
     layersGroupRef.current = layersGroup;
     drawingLayerRef.current = drawingLayer;
 
-    // Fix map layout recalculation on container resize
     setTimeout(() => {
       map.invalidateSize();
     }, 200);
 
     return () => {
+      if (basemapCleanupRef.current) {
+        basemapCleanupRef.current();
+        basemapCleanupRef.current = null;
+      }
       map.remove();
       mapInstanceRef.current = null;
+      layersGroupRef.current = null;
+      drawingLayerRef.current = null;
     };
   }, []);
 
-  // Switch Base Layer (OSM vs Satellite)
+  // Switch Base Layer melalui mapProviderRegistry
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
 
-    map.eachLayer((layer) => {
-      if (layer instanceof L.TileLayer) {
-        map.removeLayer(layer);
-      }
-    });
-
-    if (activeTile === 'satellite') {
-      L.tileLayer(
-        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        { 
-          maxZoom: 19,
-          attribution: 'Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community'
-        }
-      ).addTo(map);
-    } else {
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        maxZoom: 20,
-        subdomains: 'abcd',
-        attribution: '&copy; OpenStreetMap contributors &copy; CARTO | SADEWA WebGIS'
-      }).addTo(map);
+    if (basemapCleanupRef.current) {
+      basemapCleanupRef.current();
+      basemapCleanupRef.current = null;
     }
-  }, [activeTile]);
+
+    const handle = attachBasemapToLeaflet(map, mapMode, {
+      customSatelliteTileUrl: gisBootstrap?.config?.customSatelliteTileUrl,
+      activeProviderId: gisBootstrap?.config?.activeProviderId
+    });
+    basemapCleanupRef.current = handle.cleanup;
+    setProviderNotice(handle.fallbackReason || null);
+
+    return () => {
+      if (basemapCleanupRef.current) {
+        basemapCleanupRef.current();
+        basemapCleanupRef.current = null;
+      }
+    };
+  }, [
+    mapMode,
+    gisBootstrap?.config?.customSatelliteTileUrl,
+    gisBootstrap?.config?.activeProviderId
+  ]);
+
+  // Sinkronisasi viewport dinamis per tenant
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    const vpKey = `${viewport.source}:${viewport.center[0].toFixed(4)},${viewport.center[1].toFixed(4)}:${viewport.zoom}`;
+    if (lastViewportKeyRef.current === vpKey) return;
+    lastViewportKeyRef.current = vpKey;
+
+    if (viewport.leafletBounds && viewport.source === 'boundary') {
+      map.fitBounds(viewport.leafletBounds, { padding: [24, 24], maxZoom: 16 });
+    } else {
+      map.setView(viewport.center, viewport.zoom);
+    }
+  }, [viewport]);
 
   // Handle Event Map Click saat Mode Menggambar Poligon GPS
   useEffect(() => {
@@ -167,7 +288,6 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
     drawingGroup.clearLayers();
 
     if (drawingPoints.length > 0) {
-      // 1. Gambar Marker titik-titik sudut
       drawingPoints.forEach((pt, idx) => {
         const circle = L.circleMarker(pt, {
           radius: 6,
@@ -181,7 +301,6 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
         drawingGroup.addLayer(circle);
       });
 
-      // 2. Gambar garis penghubung
       if (drawingPoints.length >= 2) {
         const polyline = L.polyline(drawingPoints, {
           color: '#ef4444',
@@ -191,7 +310,6 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
         drawingGroup.addLayer(polyline);
       }
 
-      // 3. Gambar poligon tertutup jika >= 3 titik
       if (drawingPoints.length >= 3) {
         const polygon = L.polygon(drawingPoints, {
           color: '#dc2626',
@@ -204,7 +322,7 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
     }
   }, [drawingPoints]);
 
-  // Render Overlay Poligon Dusun, Bidang Tanah Warga, & Fasilitas
+  // Render Overlay Batas Desa, Dusun, Bidang Tanah Warga, & Fasilitas
   useEffect(() => {
     const layersGroup = layersGroupRef.current;
     const map = mapInstanceRef.current;
@@ -212,7 +330,28 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
 
     layersGroup.clearLayers();
 
-    // 1. Render Batas Administrasi Dusun
+    // 0. Batas Wilayah Desa Aktif (jika tersedia)
+    if (showVillageBounds && gisBootstrap?.activeBoundary?.geometryGeoJson) {
+      const polygons = geoJsonGeometryToLeafletPolygons(gisBootstrap.activeBoundary.geometryGeoJson);
+      const boundaryColor = gisBootstrap.config?.boundaryColor || '#ec4899';
+      polygons.forEach((rings) => {
+        const villagePoly = L.polygon(rings, {
+          color: boundaryColor,
+          weight: 3,
+          dashArray: '8, 5',
+          fillColor: boundaryColor,
+          fillOpacity: 0.06
+        });
+        const tip = document.createElement('div');
+        const tipTitle = document.createElement('strong');
+        tipTitle.textContent = `Batas Wilayah ${villageProfile.villageName || 'Desa'}`;
+        tip.appendChild(tipTitle);
+        villagePoly.bindTooltip(tip, { sticky: true });
+        layersGroup.addLayer(villagePoly);
+      });
+    }
+
+    // 1. Batas Administrasi Dusun
     if (showDusunBounds && dusunBoundaries) {
       dusunBoundaries.forEach((dusun) => {
         if (!dusun.coordinates || dusun.coordinates.length === 0) return;
@@ -225,41 +364,50 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
           fillOpacity: 0.08
         });
 
-        polygon.bindTooltip(
-          `<div class="font-bold text-xs font-sans text-slate-800">${dusun.name}</div><div class="text-[10px] text-slate-500">Kadus: ${dusun.leaderName}</div>`,
-          { permanent: true, direction: 'center', className: 'dusun-label-tooltip' }
-        );
+        const tipEl = document.createElement('div');
+        const titleEl = document.createElement('div');
+        titleEl.className = 'font-bold text-xs font-sans text-slate-800';
+        titleEl.textContent = dusun.name;
+        const leaderEl = document.createElement('div');
+        leaderEl.className = 'text-[10px] text-slate-500';
+        leaderEl.textContent = `Kadus: ${dusun.leaderName}`;
+        tipEl.appendChild(titleEl);
+        tipEl.appendChild(leaderEl);
+
+        polygon.bindTooltip(tipEl, {
+          permanent: true,
+          direction: 'center',
+          className: 'dusun-label-tooltip'
+        });
 
         layersGroup.addLayer(polygon);
       });
     }
 
-    // 2. Render Poligon Bidang Tanah Warga (PBB-P2 & SPORADIK)
+    // 2. Poligon Bidang Tanah Warga (PBB-P2 & SPORADIK)
     if (parcels) {
       parcels.forEach((parcel) => {
         if (!parcel.coordinates || parcel.coordinates.length === 0) return;
 
         const isSelected = selectedParcelId === parcel.id;
-
-        // Penentuan Warna Poligon
-        let fillColor = '#10b981'; // Emerald Default
+        let fillColor = '#10b981';
         let strokeColor = '#059669';
 
         if (parcel.pbbStatus === 'BELUM_LUNAS') {
-          fillColor = '#f59e0b'; // Amber
+          fillColor = '#f59e0b';
           strokeColor = '#d97706';
         } else if (parcel.pbbStatus === 'BEBAS_PAJAK') {
-          fillColor = '#8b5cf6'; // Purple
+          fillColor = '#8b5cf6';
           strokeColor = '#7c3aed';
         }
 
         if (parcel.sporadikStatus === 'SPORADIK_TERBIT') {
-          fillColor = '#2563eb'; // Blue
+          fillColor = '#2563eb';
           strokeColor = '#1d4ed8';
         }
 
         if (isSelected) {
-          fillColor = '#ec4899'; // Pink Highlight
+          fillColor = '#ec4899';
           strokeColor = '#be185d';
         }
 
@@ -270,50 +418,20 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
           fillOpacity: isSelected ? 0.6 : 0.35
         });
 
-        // Popup Interaktif
-        const popupContent = `
-          <div class="p-1 max-w-xs font-sans text-slate-800">
-            <div class="flex items-center justify-between pb-1.5 mb-1.5 border-b border-slate-200">
-              <span class="text-[10px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">NOP: ${parcel.nop}</span>
-              <span class="text-[10px] font-bold px-1.5 py-0.5 rounded ${parcel.pbbStatus === 'LUNAS' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}">${parcel.pbbStatus}</span>
-            </div>
-            <h4 class="font-bold text-xs text-slate-900 leading-snug">${parcel.ownerName}</h4>
-            <p class="text-[11px] text-slate-500 mt-0.5">${parcel.addressDusun}</p>
-            <div class="grid grid-cols-2 gap-1 my-2 text-[10px] bg-slate-50 p-2 rounded-lg border border-slate-100">
-              <div>
-                <span class="text-slate-400 block">Luas Tanah (Shoelace):</span>
-                <strong class="text-slate-800 font-bold">${parcel.landAreaSqM.toLocaleString('id-ID')} m²</strong>
-              </div>
-              <div>
-                <span class="text-slate-400 block">PBB-P2 (Batang Hari):</span>
-                <strong class="text-emerald-700 font-bold">Rp ${parcel.pbbTaxAmount.toLocaleString('id-ID')}</strong>
-              </div>
-            </div>
-            <div class="text-[10px] text-slate-600 mb-2">
-              <strong>SPORADIK:</strong> <span class="font-semibold text-blue-700">${parcel.sporadikStatus.replace('_', ' ')}</span>
-            </div>
-            <button id="btn-select-parcel-${parcel.id}" class="w-full py-1 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-bold transition-colors shadow-2xs">
-              Lihat Detail & SPORADIK
-            </button>
-          </div>
-        `;
-
-        polygon.bindPopup(popupContent);
+        polygon.bindPopup(buildParcelPopupElement(parcel, onSelectParcel));
 
         polygon.on('click', () => {
-          if (onSelectParcel) {
-            onSelectParcel(parcel);
-          }
+          onSelectParcel?.(parcel);
         });
 
         layersGroup.addLayer(polygon);
       });
     }
 
-    // 3. Render Titik Fasilitas Umum
+    // 3. Titik Fasilitas Umum
     if (showFacilities && facilities) {
       facilities.forEach((fac) => {
-        if (!fac.coordinates) return;
+        if (!fac.coordinates || !isValidCoordinatePair(fac.coordinates[0], fac.coordinates[1])) return;
 
         const marker = L.circleMarker(fac.coordinates, {
           radius: 7,
@@ -323,52 +441,84 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
           fillOpacity: 0.9
         });
 
-        marker.bindTooltip(
-          `<div class="font-bold text-xs text-slate-900">${fac.name}</div><div class="text-[10px] text-slate-500">${fac.category}</div>`,
-          { permanent: false }
-        );
+        const facTip = document.createElement('div');
+        const facName = document.createElement('div');
+        facName.className = 'font-bold text-xs text-slate-900';
+        facName.textContent = fac.name;
+        const facCat = document.createElement('div');
+        facCat.className = 'text-[10px] text-slate-500';
+        facCat.textContent = fac.category;
+        facTip.appendChild(facName);
+        facTip.appendChild(facCat);
 
+        marker.bindTooltip(facTip, { permanent: false });
         layersGroup.addLayer(marker);
       });
     }
-  }, [parcels, dusunBoundaries, facilities, selectedParcelId, showDusunBounds, showFacilities, onSelectParcel]);
+  }, [
+    parcels,
+    dusunBoundaries,
+    facilities,
+    selectedParcelId,
+    showVillageBounds,
+    showDusunBounds,
+    showFacilities,
+    onSelectParcel,
+    gisBootstrap,
+    villageProfile.villageName
+  ]);
 
-  // Calculated Live Area untuk Poligon Menggambar
-  const liveDrawCalc = isDrawingMode && drawingPoints.length >= 3
-    ? calculatePolygonAreaShoelace(drawingPoints)
-    : null;
+  const liveDrawCalc =
+    isDrawingMode && drawingPoints.length >= 3 ? calculatePolygonAreaShoelace(drawingPoints) : null;
 
   const handleResetZoom = () => {
-    if (mapInstanceRef.current) {
-      mapInstanceRef.current.setView([CENTER_LAT, CENTER_LNG], DEFAULT_ZOOM);
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    if (viewport.leafletBounds && viewport.source === 'boundary') {
+      map.fitBounds(viewport.leafletBounds, { padding: [24, 24], maxZoom: 16 });
+    } else {
+      map.setView(viewport.center, viewport.zoom);
     }
   };
 
   return (
     <div className={`relative rounded-2xl overflow-hidden border border-slate-200/80 shadow-xs bg-slate-900 ${className}`}>
-      {/* Container Element Peta Leaflet */}
       <div ref={mapContainerRef} style={{ height }} className="w-full z-0" />
 
-      {/* Control Panel Atas Kiri: Switch Tile & Layer Toggle */}
-      <div className="absolute top-3 left-3 z-[1000] flex flex-wrap items-center gap-2">
-        <div className="bg-white/95 backdrop-blur-md p-1 rounded-xl shadow-md border border-slate-200/80 flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => setActiveTile('osm')}
-            className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${activeTile === 'osm' ? 'bg-emerald-600 text-white shadow-2xs' : 'text-slate-600 hover:bg-slate-100'}`}
-          >
-            Vektor Peta
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTile('satellite')}
-            className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${activeTile === 'satellite' ? 'bg-emerald-600 text-white shadow-2xs' : 'text-slate-600 hover:bg-slate-100'}`}
-          >
-            Citra Satelit
-          </button>
+      {/* Control Panel Atas Kiri: Switch Mode Peta & Layer Toggle */}
+      <div className="absolute top-3 left-3 z-[1000] flex flex-wrap items-center gap-2 max-w-[calc(100%-4rem)]">
+        <div className="bg-white/95 backdrop-blur-md p-1 rounded-xl shadow-md border border-slate-200/80 flex flex-wrap items-center gap-1">
+          {MAP_MODE_OPTIONS.map((opt) => (
+            <button
+              key={opt.mode}
+              type="button"
+              onClick={() => setMapMode(opt.mode)}
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                mapMode === opt.mode
+                  ? 'bg-emerald-600 text-white shadow-2xs'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
         </div>
 
-        <div className="bg-white/95 backdrop-blur-md px-2 py-1 rounded-xl shadow-md border border-slate-200/80 flex items-center gap-2 text-xs font-semibold text-slate-700">
+        <div className="bg-white/95 backdrop-blur-md px-2.5 py-1.5 rounded-xl shadow-md border border-slate-200/80 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-700">
+          {gisBootstrap?.activeBoundary && (
+            <>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showVillageBounds}
+                  onChange={(e) => setShowVillageBounds(e.target.checked)}
+                  className="rounded border-slate-300 text-pink-600 focus:ring-pink-500 w-3.5 h-3.5"
+                />
+                <span>Batas Desa</span>
+              </label>
+              <span className="text-slate-300">|</span>
+            </>
+          )}
           <label className="flex items-center gap-1.5 cursor-pointer">
             <input
               type="checkbox"
@@ -390,6 +540,13 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
           </label>
         </div>
       </div>
+
+      {providerNotice && (
+        <div className="absolute top-14 left-3 z-[1000] max-w-md bg-amber-50/95 backdrop-blur-sm border border-amber-200 text-amber-900 px-3 py-1.5 rounded-xl shadow text-[11px] flex items-center gap-1.5">
+          <Info className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+          <span>{providerNotice}</span>
+        </div>
+      )}
 
       {/* Control Panel Atas Kanan: Reset Position */}
       <div className="absolute top-3 right-3 z-[1000]">
@@ -420,7 +577,6 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
             Klik pada area peta untuk menambahkan titik sudut koordinat poligon bidang tanah.
           </p>
 
-          {/* Realtime Live Shoelace Area Preview */}
           {liveDrawCalc ? (
             <div className="bg-emerald-950/80 border border-emerald-800/80 p-2.5 rounded-xl mb-2.5 grid grid-cols-2 gap-2 text-xs">
               <div>

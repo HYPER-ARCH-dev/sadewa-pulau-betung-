@@ -48,7 +48,15 @@ export const TENANT_OWNED_MODELS = new Set<string>([
   'ToddlerMeasurement',
   'PosyanduSchedule',
   'AuditLog',
-  'AttendanceLog'
+  'AttendanceLog',
+  'GisTenantConfig',
+  'GisVillageBoundary',
+  'GisRoad',
+  'GisInfrastructure',
+  'GisPotentialArea',
+  'GisDataSource',
+  'GisImportJob',
+  'GisChangeLog'
 ]);
 
 const READ_AND_FILTER_OPS = new Set<string>([

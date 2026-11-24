@@ -25,6 +25,7 @@ import { SERVER_CONFIG } from '../config/constants';
 import { getStorageArchitectureSummary } from '../config/storageRegistry';
 import { getAdminArchitectureMap } from '../config/adminModuleRegistry';
 import { runDatabaseBackup } from '../scripts/db-backup';
+import { getPublicGisBootstrap } from '../services/gis/gisRepository';
 
 const router = Router();
 
@@ -3453,6 +3454,40 @@ router.post('/facilities', requireRolesOrPermission(['super_admin', 'admin_desa'
       return res.status(400).json({ success: false, error: 'Nama fasilitas dan alamat wajib diisi.' });
     }
 
+    let resolvedCoordinates: [number, number] | null = null;
+    if (
+      Array.isArray(coordinates) &&
+      coordinates.length >= 2 &&
+      Number.isFinite(Number(coordinates[0])) &&
+      Number.isFinite(Number(coordinates[1])) &&
+      !(Number(coordinates[0]) === 0 && Number(coordinates[1]) === 0)
+    ) {
+      resolvedCoordinates = [Number(coordinates[0]), Number(coordinates[1])];
+    } else {
+      const gis = await getPublicGisBootstrap().catch(() => null);
+      if (
+        gis?.config?.centerLat != null &&
+        gis?.config?.centerLng != null &&
+        Number.isFinite(gis.config.centerLat) &&
+        Number.isFinite(gis.config.centerLng)
+      ) {
+        resolvedCoordinates = [gis.config.centerLat, gis.config.centerLng];
+      }
+    }
+
+    if (!resolvedCoordinates) {
+      return res.status(400).json({
+        success: false,
+        error: 'Koordinat lokasi fasilitas wajib diisi karena titik pusat peta desa belum dikonfigurasi.'
+      });
+    }
+
+    const cleanDusun = typeof dusun === 'string' && dusun.trim() ? dusun.trim() : 'Wilayah Desa';
+    const cleanLabel =
+      typeof coordinatesLabel === 'string' && coordinatesLabel.trim()
+        ? coordinatesLabel.trim()
+        : `${resolvedCoordinates[0].toFixed(4)}°, ${resolvedCoordinates[1].toFixed(4)}°`;
+
     if (!(await isDatabaseAvailableCached())) {
       const db = getDb();
       db.facilities = db.facilities || [];
@@ -3461,9 +3496,9 @@ router.post('/facilities', requireRolesOrPermission(['super_admin', 'admin_desa'
         name: name.trim(),
         category: category || 'infrastruktur',
         address: address.trim(),
-        dusun: dusun || 'Dusun Betung Indah',
-        coordinatesLabel: coordinatesLabel || (coordinates ? `${coordinates[0]}, ${coordinates[1]}` : '-1.5280, 103.3140'),
-        coordinates: coordinates || [-1.5280, 103.3140],
+        dusun: cleanDusun,
+        coordinatesLabel: cleanLabel,
+        coordinates: resolvedCoordinates,
         description: description || '',
         imageUrl: imageUrl || 'https://images.unsplash.com/photo-1577495508048-b635879837f1?w=800&auto=format&fit=crop&q=80',
         contact: contact || ''
@@ -3478,9 +3513,9 @@ router.post('/facilities', requireRolesOrPermission(['super_admin', 'admin_desa'
         name: name.trim(),
         category: category || 'infrastruktur',
         address: address.trim(),
-        dusun: dusun || 'Dusun Betung Indah',
-        coordinatesLabel: coordinatesLabel || (coordinates ? `${coordinates[0]}, ${coordinates[1]}` : '-1.5280, 103.3140'),
-        coordinates: coordinates || [-1.5280, 103.3140],
+        dusun: cleanDusun,
+        coordinatesLabel: cleanLabel,
+        coordinates: resolvedCoordinates,
         description: description || '',
         imageUrl: imageUrl || 'https://images.unsplash.com/photo-1577495508048-b635879837f1?w=800&auto=format&fit=crop&q=80',
         contact: contact || ''

@@ -145,6 +145,9 @@ export interface DatabaseSchema {
   kpm?: any[];
   toddlers?: any[];
   landParcels?: any[];
+  gisTenantConfig?: any;
+  gisVillageBoundaries?: any[];
+  gisChangeLogs?: any[];
   villageProfile: VillageProfileRecord;
   territories: DusunRecord[];
 }
@@ -268,6 +271,20 @@ export const INITIAL_TERRITORIES: DusunRecord[] = [
   }
 ];
 
+export const INITIAL_GIS_TENANT_CONFIG = {
+  id: 'gis-cfg-pulau-betung',
+  regionCode: '15.04.05.2009',
+  centerLat: -1.5562,
+  centerLng: 103.4475,
+  defaultZoom: 14,
+  bbox: [103.40, -1.58, 103.50, -1.53] as [number, number, number, number],
+  defaultMapMode: 'roadmap' as const,
+  activeProviderId: 'openfreemap',
+  showVillageBoundary: true,
+  boundaryColor: '#ec4899',
+  customSatelliteTileUrl: null
+};
+
 export function seedInitialData(): DatabaseSchema {
   const defaultPassword = process.env.SEED_DEFAULT_PASSWORD?.trim();
 
@@ -317,6 +334,9 @@ export function seedInitialData(): DatabaseSchema {
     auditLogs: JSON.parse(JSON.stringify(INITIAL_AUDIT_LOGS)),
     attendance: [],
     deletedServiceRequests: [],
+    gisTenantConfig: JSON.parse(JSON.stringify(INITIAL_GIS_TENANT_CONFIG)),
+    gisVillageBoundaries: [],
+    gisChangeLogs: [],
     villageProfile: JSON.parse(JSON.stringify(INITIAL_VILLAGE_PROFILE)),
     territories: JSON.parse(JSON.stringify(INITIAL_TERRITORIES))
   };
@@ -391,6 +411,18 @@ export function getDb(): DatabaseSchema {
       }
       if (!Array.isArray(dbInstance!.landParcels)) {
         dbInstance!.landParcels = [];
+        hasUpdates = true;
+      }
+      if (!dbInstance!.gisTenantConfig) {
+        dbInstance!.gisTenantConfig = JSON.parse(JSON.stringify(INITIAL_GIS_TENANT_CONFIG));
+        hasUpdates = true;
+      }
+      if (!Array.isArray(dbInstance!.gisVillageBoundaries)) {
+        dbInstance!.gisVillageBoundaries = [];
+        hasUpdates = true;
+      }
+      if (!Array.isArray(dbInstance!.gisChangeLogs)) {
+        dbInstance!.gisChangeLogs = [];
         hasUpdates = true;
       }
 

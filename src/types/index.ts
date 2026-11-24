@@ -446,6 +446,7 @@ export interface VillageProfile {
   lastUpdated?: string;
   updatedBy?: string;
   settings?: Record<string, unknown>;
+  regionCode?: string | null;
   officeLocation?: {
     lat?: number;
     lng?: number;

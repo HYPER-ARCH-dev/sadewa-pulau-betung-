@@ -90,6 +90,11 @@ export function getCleanPurpose(
  * Keyword: OFFICIAL_LETTER, UNMASKED_NIK, PDP_COMPLIANCE
  */
 export function getUnmaskedOfficialNik(request: Partial<ServiceRequest>): string {
+  // Jika ini adalah Draf Pratinjau Mandiri Warga, tampilkan NIK apa adanya yang diketik warga
+  if (request.trackingCode === 'DRAFT-PREVIEW' && request.citizenNik) {
+    return request.citizenNik.trim();
+  }
+
   // 1. Cek properti citizenNik jika sudah 16 digit utuh tanpa tanda bintang
   if (request.citizenNik && !request.citizenNik.includes('*') && request.citizenNik.replace(/[^0-9]/g, '').length >= 16) {
     return request.citizenNik.replace(/[^0-9]/g, '').slice(0, 16);

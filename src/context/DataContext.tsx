@@ -54,7 +54,7 @@ import { normalizeTerritories } from '../utils/territory';
 import { api } from '../services/api';
 import { generateOfficialLetterNumber } from '../utils/letterNumbering';
 import { VILLAGE_INFO } from '../constants/village';
-import { LandParcel, LandUseCategory } from '../types/webgis';
+import { LandParcel, LandUseCategory, GisBootstrapPayload } from '../types/webgis';
 import { INITIAL_LAND_PARCELS } from '../data/initialWebGisData';
 import { calculatePolygonAreaShoelace } from '../utils/geometryEngine';
 import { useQueryClient } from '@tanstack/react-query';
@@ -112,11 +112,13 @@ export interface DataContextType {
   bansosRecipients: BansosRecipient[];
   bansosComplaints: BansosComplaint[];
   demographics: PublicDemographics | null;
+  gisBootstrap: GisBootstrapPayload | null;
   userLikedItems: string[];
   isItemLiked: (id: string) => boolean;
   
   // Actions
   reloadServerData: () => Promise<void>;
+  refreshGisBootstrap: () => Promise<void>;
   updateBudget: (data: BudgetYearData) => void;
   submitServiceRequest: (data: Omit<ServiceRequest, 'id' | 'trackingCode' | 'requestDate' | 'status'>) => string;
   updateServiceRequestStatus: (id: string, status: ServiceStatus, staffNotes: string) => void;
@@ -240,6 +242,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [bansosRecipients, setBansosRecipients] = useState<BansosRecipient[]>([]);
   const [bansosComplaints, setBansosComplaints] = useState<BansosComplaint[]>([]);
   const [demographics, setDemographics] = useState<PublicDemographics | null>(null);
+  const [gisBootstrap, setGisBootstrap] = useState<GisBootstrapPayload | null>(null);
   
   // Preferensi user tetap di LocalStorage (Client-only)
   const [userLikedItems, setUserLikedItems] = useState<string[]>(() =>
@@ -447,10 +450,27 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setAuditLogs((prev) => [newLog, ...prev]);
   }, [currentUser]);
 
+  const refreshGisBootstrap = useCallback(async () => {
+    try {
+      const res = await api.getGisBootstrap();
+      if (res.success && res.data) {
+        setGisBootstrap(res.data);
+      }
+    } catch {
+      // Abaikan jika server sedang offline
+    }
+  }, []);
+
   const reloadServerData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const bootstrap = await api.getBootstrapData();
+      const [bootstrap, gisRes] = await Promise.all([
+        api.getBootstrapData(),
+        api.getGisBootstrap().catch(() => null)
+      ]);
+      if (gisRes?.success && gisRes.data) {
+        setGisBootstrap(gisRes.data);
+      }
       const isBootstrapEmptyOrOffline =
         !bootstrap ||
         (!bootstrap.profile &&
@@ -1524,8 +1544,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       deletedRequests,
       complaints, news, announcements, agendas, gallery, budget, budgetHistory,
       developmentProjects, potentials, umkm, officials, facilities, auditLogs,
-      villageProfile, territories, webGisData, setWebGisData, reloadServerData,
-      bansosRecipients, bansosComplaints, demographics, userLikedItems, isItemLiked, addBansosRecipient, bulkAddBansosRecipients, replaceBansosRecipients, updateBansosRecipient,
+      villageProfile, territories, webGisData, setWebGisData, reloadServerData, refreshGisBootstrap,
+      bansosRecipients, bansosComplaints, demographics, gisBootstrap, userLikedItems, isItemLiked, addBansosRecipient, bulkAddBansosRecipients, replaceBansosRecipients, updateBansosRecipient,
       deleteBansosRecipient, submitBansosComplaint, updateBansosComplaintStatus,
       updateBudget, submitServiceRequest, updateServiceRequestStatus, deleteServiceRequest, bulkDeleteServiceRequests,
       restoreDeletedServiceRequest, findRequestByCode, permanentlyDeleteServiceRequestLog, clearAllDeletedServiceRequests,

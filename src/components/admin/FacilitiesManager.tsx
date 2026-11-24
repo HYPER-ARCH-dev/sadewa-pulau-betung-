@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { MapFacility } from '../../types';
+import { isValidCoordinatePair, resolveMapViewport } from '../../utils/gisAdapter';
 import {
   MapPin,
   Plus,
@@ -8,8 +9,6 @@ import {
   Trash2,
   Search,
   CheckCircle2,
-  Building2,
-  Phone,
   Compass,
   X
 } from 'lucide-react';
@@ -35,7 +34,31 @@ const DEFAULT_FACILITY_IMAGES = [
 ];
 
 export const FacilitiesManager: React.FC = () => {
-  const { facilities, addFacility, updateFacility, deleteFacility } = useApp();
+  const {
+    facilities,
+    territories,
+    villageProfile,
+    gisBootstrap,
+    addFacility,
+    updateFacility,
+    deleteFacility,
+    addToast
+  } = useApp();
+
+  const defaultViewport = useMemo(
+    () =>
+      resolveMapViewport({
+        gisBootstrap,
+        villageProfile,
+        facilities
+      }),
+    [gisBootstrap, villageProfile, facilities]
+  );
+
+  const defaultDusunName = territories?.[0]?.name || 'Wilayah Desa';
+  const defaultVillageLabel = villageProfile?.villageName || 'Desa';
+  const defaultLatStr = defaultViewport.isConfigured ? defaultViewport.center[0].toFixed(6) : '';
+  const defaultLngStr = defaultViewport.isConfigured ? defaultViewport.center[1].toFixed(6) : '';
 
   const [searchQuery, setSearchQuery] = useState('');
   const [filterCategory, setFilterCategory] = useState<string>('all');
@@ -46,9 +69,9 @@ export const FacilitiesManager: React.FC = () => {
   const [name, setName] = useState('');
   const [category, setCategory] = useState<MapFacility['category']>('infrastruktur');
   const [address, setAddress] = useState('');
-  const [dusun, setDusun] = useState('Dusun Betung Indah');
-  const [lat, setLat] = useState('-1.5284');
-  const [lng, setLng] = useState('103.3142');
+  const [dusun, setDusun] = useState(defaultDusunName);
+  const [lat, setLat] = useState(defaultLatStr);
+  const [lng, setLng] = useState(defaultLngStr);
   const [description, setDescription] = useState('');
   const [imageUrl, setImageUrl] = useState(DEFAULT_FACILITY_IMAGES[0]);
   const [contact, setContact] = useState('');
@@ -58,9 +81,9 @@ export const FacilitiesManager: React.FC = () => {
     setName('');
     setCategory('kantor_desa');
     setAddress('');
-    setDusun('Dusun Betung Indah');
-    setLat('-1.5284');
-    setLng('103.3142');
+    setDusun(defaultDusunName);
+    setLat(defaultLatStr);
+    setLng(defaultLngStr);
     setDescription('');
     setImageUrl(DEFAULT_FACILITY_IMAGES[Math.floor(Math.random() * DEFAULT_FACILITY_IMAGES.length)]);
     setContact('');
@@ -73,8 +96,8 @@ export const FacilitiesManager: React.FC = () => {
     setCategory(item.category);
     setAddress(item.address);
     setDusun(item.dusun);
-    setLat(item.coordinates ? item.coordinates[0].toString() : '-1.5284');
-    setLng(item.coordinates ? item.coordinates[1].toString() : '103.3142');
+    setLat(item.coordinates ? item.coordinates[0].toString() : defaultLatStr);
+    setLng(item.coordinates ? item.coordinates[1].toString() : defaultLngStr);
     setDescription(item.description);
     setImageUrl(item.imageUrl || DEFAULT_FACILITY_IMAGES[0]);
     setContact(item.contact || '');
@@ -85,19 +108,31 @@ export const FacilitiesManager: React.FC = () => {
     e.preventDefault();
     if (!name.trim() || !address.trim()) return;
 
-    const parsedLat = parseFloat(lat) || -1.5284;
-    const parsedLng = parseFloat(lng) || 103.3142;
+    const parsedLat = Number.parseFloat(lat);
+    const parsedLng = Number.parseFloat(lng);
+
+    if (!isValidCoordinatePair(parsedLat, parsedLng)) {
+      addToast(
+        'warning',
+        'Koordinat Belum Valid',
+        'Masukkan nilai Latitude dan Longitude yang valid agar lokasi tampil akurat pada peta desa.'
+      );
+      return;
+    }
+
     const coordinatesLabel = `${parsedLat.toFixed(4)}°, ${parsedLng.toFixed(4)}°`;
+    const cleanDusun = dusun.trim() || defaultDusunName;
+    const defaultDesc = `Fasilitas umum ${name.trim()} ${defaultVillageLabel}.`;
 
     if (editingFacility) {
       updateFacility(editingFacility.id, {
         name: name.trim(),
         category,
         address: address.trim(),
-        dusun: dusun.trim(),
+        dusun: cleanDusun,
         coordinatesLabel,
         coordinates: [parsedLat, parsedLng],
-        description: description.trim() || `Fasilitas umum ${name.trim()} Desa Pulau Betung.`,
+        description: description.trim() || defaultDesc,
         imageUrl: imageUrl.trim() || DEFAULT_FACILITY_IMAGES[0],
         contact: contact.trim() || undefined
       });
@@ -106,10 +141,10 @@ export const FacilitiesManager: React.FC = () => {
         name: name.trim(),
         category,
         address: address.trim(),
-        dusun: dusun.trim(),
+        dusun: cleanDusun,
         coordinatesLabel,
         coordinates: [parsedLat, parsedLng],
-        description: description.trim() || `Fasilitas umum ${name.trim()} Desa Pulau Betung.`,
+        description: description.trim() || defaultDesc,
         imageUrl: imageUrl.trim() || DEFAULT_FACILITY_IMAGES[0],
         contact: contact.trim() || undefined
       });
@@ -235,7 +270,9 @@ export const FacilitiesManager: React.FC = () => {
                   </h3>
                   <div className="flex items-center text-[11px] text-slate-500 space-x-1">
                     <MapPin className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                    <span className="truncate">{item.address} ({item.dusun})</span>
+                    <span className="truncate">
+                      {item.address} ({item.dusun})
+                    </span>
                   </div>
                   <div className="text-[10px] text-slate-400 font-mono flex items-center space-x-1">
                     <Compass className="w-3 h-3 text-slate-400 shrink-0" />
@@ -305,7 +342,7 @@ export const FacilitiesManager: React.FC = () => {
                   <input
                     type="text"
                     required
-                    placeholder="Contoh: Balai Pertemuan Desa / Dermaga Nelayan RT 03"
+                    placeholder="Contoh: Balai Pertemuan Desa / Poskesdes RT 03"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     className="w-full text-xs px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-600"
@@ -318,7 +355,7 @@ export const FacilitiesManager: React.FC = () => {
                   </label>
                   <select
                     value={category}
-                    onChange={(e) => setCategory(e.target.value as any)}
+                    onChange={(e) => setCategory(e.target.value as MapFacility['category'])}
                     className="w-full text-xs px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-600 bg-white"
                   >
                     {CATEGORY_OPTIONS.map((c) => (
@@ -335,7 +372,7 @@ export const FacilitiesManager: React.FC = () => {
                   </label>
                   <input
                     type="text"
-                    placeholder="Contoh: Dusun Betung Indah / Dusun Teluk Melintang"
+                    placeholder={defaultDusunName}
                     value={dusun}
                     onChange={(e) => setDusun(e.target.value)}
                     className="w-full text-xs px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-600"
@@ -349,7 +386,7 @@ export const FacilitiesManager: React.FC = () => {
                   <input
                     type="text"
                     required
-                    placeholder="Contoh: Jl. Lintas Pemayung No. 12, Dekat Jembatan Utama"
+                    placeholder="Contoh: Jl. Poros Utama Desa No. 12"
                     value={address}
                     onChange={(e) => setAddress(e.target.value)}
                     className="w-full text-xs px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-600"
@@ -358,11 +395,12 @@ export const FacilitiesManager: React.FC = () => {
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Latitude (Garis Lintang):
+                    Latitude (Garis Lintang): <span className="text-rose-500">*</span>
                   </label>
                   <input
                     type="text"
-                    placeholder="-1.5284"
+                    required
+                    placeholder="Contoh: -2.5489"
                     value={lat}
                     onChange={(e) => setLat(e.target.value)}
                     className="w-full text-xs font-mono px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-600"
@@ -371,11 +409,12 @@ export const FacilitiesManager: React.FC = () => {
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Longitude (Garis Bujur):
+                    Longitude (Garis Bujur): <span className="text-rose-500">*</span>
                   </label>
                   <input
                     type="text"
-                    placeholder="103.3142"
+                    required
+                    placeholder="Contoh: 118.0149"
                     value={lng}
                     onChange={(e) => setLng(e.target.value)}
                     className="w-full text-xs font-mono px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-600"

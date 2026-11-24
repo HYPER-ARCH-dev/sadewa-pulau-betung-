@@ -72,3 +72,100 @@ export interface WebGisSummary {
   totalSporadikVerified: number;
   totalSporadikDraft: number;
 }
+
+// ============================================================================
+// UNIVERSAL MULTI-TENANT GIS FOUNDATION TYPES
+// ============================================================================
+
+export type MapMode = 'roadmap' | 'satellite' | 'hybrid' | 'terrain';
+
+export type BoundaryVerificationStatus = 'BELUM_TERVERIFIKASI' | 'PERLU_VERIFIKASI' | 'TERVERIFIKASI';
+
+export type BoundarySourceType =
+  | 'OFFICIAL_BIG'
+  | 'PEMDA'
+  | 'ADMIN_DIGITIZED'
+  | 'IMPORTED_GEOJSON'
+  | 'SURVEY_LAPANGAN'
+  | 'UNKNOWN';
+
+export interface GeoJsonPolygonGeometry {
+  type: 'Polygon' | 'MultiPolygon';
+  coordinates: number[][][] | number[][][][];
+}
+
+/** Standard RFC 7946 GeoJSON bbox: [minLng, minLat, maxLng, maxLat] */
+export type GisBoundingBox = [number, number, number, number];
+
+export interface GisVillageBoundary {
+  id: string;
+  villageId?: string | null;
+  regionCode?: string | null;
+  status: BoundaryVerificationStatus;
+  sourceType: BoundarySourceType;
+  sourceName?: string | null;
+  sourceYear?: number | null;
+  licenseNote?: string | null;
+  geometryGeoJson: GeoJsonPolygonGeometry;
+  bbox?: GisBoundingBox | null;
+  centroidLat?: number | null;
+  centroidLng?: number | null;
+  areaSqM?: number | null;
+  perimeterMeters?: number | null;
+  isActive: boolean;
+  importJobId?: string | null;
+  verifiedBy?: string | null;
+  verifiedAt?: string | null;
+  verificationNotes?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface CreateVillageBoundaryInput {
+  regionCode?: string | null;
+  status?: BoundaryVerificationStatus;
+  sourceType: BoundarySourceType;
+  sourceName?: string | null;
+  sourceYear?: number | null;
+  licenseNote?: string | null;
+  geometryGeoJson: GeoJsonPolygonGeometry;
+  isActive?: boolean;
+  verificationNotes?: string | null;
+}
+
+export interface UpdateVillageBoundaryInput {
+  regionCode?: string | null;
+  sourceType?: BoundarySourceType;
+  sourceName?: string | null;
+  sourceYear?: number | null;
+  licenseNote?: string | null;
+  geometryGeoJson?: GeoJsonPolygonGeometry;
+  isActive?: boolean;
+  verificationNotes?: string | null;
+}
+
+export interface GisTenantConfig {
+  id?: string;
+  regionCode?: string | null;
+  centerLat?: number | null;
+  centerLng?: number | null;
+  defaultZoom: number;
+  bbox?: GisBoundingBox | null;
+  defaultMapMode: MapMode;
+  activeProviderId?: string | null;
+  showVillageBoundary: boolean;
+  boundaryColor: string;
+  customSatelliteTileUrl?: string | null;
+}
+
+export interface GisBootstrapPayload {
+  tenantId: string;
+  villageName: string;
+  regionCode?: string | null;
+  config: GisTenantConfig;
+  activeBoundary: GisVillageBoundary | null;
+  hasVerifiedBoundary: boolean;
+  dataSource: 'database' | 'derived_profile' | 'neutral_fallback';
+}
+
+

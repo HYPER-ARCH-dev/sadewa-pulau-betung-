@@ -34,6 +34,7 @@ import {
   PublicDemographics
 } from '../types';
 import { Resident } from '../types/resident';
+import { GisBootstrapPayload, GisTenantConfig } from '../types/webgis';
 import { compressImage, isImageFile, formatFileSize } from '../utils/imageCompressor';
 import {
   getTenantAuthToken,
@@ -1624,6 +1625,46 @@ export const api = {
         headers: getAuthHeaders()
       });
       return processResponse(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  // Universal GIS Engine (Multi-Tenant Bootstrap & Admin Config)
+  async getGisBootstrap(): Promise<{ success: boolean; data?: GisBootstrapPayload; error?: string }> {
+    try {
+      const res = await fetch(`${BASE_URL}/public/gis/bootstrap`);
+      return processResponse<GisBootstrapPayload>(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async getAdminGisConfig(): Promise<{
+    success: boolean;
+    data?: (GisBootstrapPayload & { gisTablesReady?: boolean });
+    error?: string;
+  }> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/gis/config`, {
+        headers: getAuthHeaders()
+      });
+      return processResponse<GisBootstrapPayload & { gisTablesReady?: boolean }>(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async updateAdminGisConfig(
+    payload: Partial<GisTenantConfig>
+  ): Promise<{ success: boolean; data?: GisTenantConfig; error?: string }> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/gis/config`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(payload)
+      });
+      return processResponse<GisTenantConfig>(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }

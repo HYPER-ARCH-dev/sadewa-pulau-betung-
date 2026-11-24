@@ -15,6 +15,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import express from 'express';
+import http from 'http';
 import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
@@ -53,6 +54,7 @@ async function startServer() {
   // Buat aplikasi Express bersama seluruh rute API & keamanan
   const app = createApiApp();
   const PORT = 3000;
+  const httpServer = http.createServer(app);
 
   // ==========================================================================
   // 🌐 PENGATUR TAMPILAN FRONTEND (VITE DEV vs PRODUCTION BUILD)
@@ -71,7 +73,10 @@ async function startServer() {
     });
   } else {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: { server: httpServer }
+      },
       appType: 'spa'
     });
     app.use(vite.middlewares);
@@ -98,7 +103,7 @@ async function startServer() {
   // ==========================================================================
   // 🚀 MENJALANKAN LISTENER SERVER & PENJADWAL BACKUP OTOMATIS PER-TENANT
   // ==========================================================================
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server SADEWA aktif pada port ${PORT}`);
 
     cron.schedule('0 2 * * *', async () => {

@@ -186,6 +186,8 @@ model VillageProfile {
   totalFamilies        Int
   areaSqKm             Float
   borders              Json     // { north, south, east, west }
+  regionCode           String?
+  spatialMetadata      Json?
   officeLocation       Json?    // { lat, lng, radius }
   kadesName            String?
   kadesNip             String?
@@ -664,6 +666,9 @@ model MapFacility {
   coordinates      Json     // [lat, lng]
   imageUrl         String?
   contact          String?
+  importJobId      String?
+  sourceType       String?
+  geometryGeoJson  Json?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -698,6 +703,9 @@ model LandParcel {
   surveyorName               String?
   witnesses                  Json?    // String[]
   notes                      String?  @db.Text
+  importJobId                String?
+  sourceType                 String?
+  geometryGeoJson            Json?
   createdAt                  DateTime @default(now())
   updatedAt                  DateTime @updatedAt
 
@@ -813,3 +821,175 @@ model AttendanceLog {
 
   @@index([villageId])
 }
+
+// ============================================================================
+// 14. UNIVERSAL MULTI-TENANT GIS ENGINE (PHASE 4 ADDITIVE SCHEMA)
+// ============================================================================
+
+model GisRegionCatalog {
+  id                     String   @id @default(cuid())
+  regionCode             String   @unique
+  provinceCode           String
+  provinceName           String
+  regencyCode            String
+  regencyName            String
+  districtCode           String
+  districtName           String
+  villageName            String
+  sourceName             String?
+  sourceYear             Int?
+  centroidLat            Float?
+  centroidLng            Float?
+  bbox                   Json?
+  defaultGeometryGeoJson Json?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@index([provinceCode, regencyCode, districtCode])
+}
+
+model GisTenantConfig {
+  id                     String   @id @default(cuid())
+  villageId              String?  @unique
+  regionCode             String?
+  centerLat              Float?
+  centerLng              Float?
+  defaultZoom            Int      @default(14)
+  bbox                   Json?
+  defaultMapMode         String   @default("roadmap")
+  activeProviderId       String?
+  showVillageBoundary    Boolean  @default(true)
+  boundaryColor          String   @default("#ec4899")
+  customSatelliteTileUrl String?
+  metadata               Json?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@index([villageId])
+}
+
+model GisVillageBoundary {
+  id              String    @id @default(cuid())
+  villageId       String?
+  regionCode      String?
+  status          String    @default("BELUM_TERVERIFIKASI")
+  sourceType      String    @default("ADMIN_DIGITIZED")
+  sourceName      String?
+  sourceYear      Int?
+  licenseNote     String?
+  geometryGeoJson Json
+  bbox            Json?
+  centroidLat     Float?
+  centroidLng     Float?
+  areaSqM         Float?
+  perimeterMeters Float?
+  isActive        Boolean   @default(false)
+  importJobId     String?
+  verifiedBy      String?
+  verifiedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([villageId])
+  @@index([villageId, isActive])
+}
+
+model GisRoad {
+  id              String   @id @default(cuid())
+  villageId       String?
+  name            String
+  roadClass       String?
+  surfaceType     String?
+  lengthMeters    Float?
+  geometryGeoJson Json
+  importJobId     String?
+  sourceType      String?
+  metadata        Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([villageId])
+}
+
+model GisInfrastructure {
+  id              String   @id @default(cuid())
+  villageId       String?
+  name            String
+  category        String
+  conditionStatus String?
+  geometryGeoJson Json
+  importJobId     String?
+  sourceType      String?
+  metadata        Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([villageId])
+}
+
+model GisPotentialArea {
+  id              String   @id @default(cuid())
+  villageId       String?
+  name            String
+  sector          String
+  areaSqM         Float?
+  geometryGeoJson Json
+  importJobId     String?
+  sourceType      String?
+  metadata        Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([villageId])
+}
+
+model GisDataSource {
+  id              String   @id @default(cuid())
+  villageId       String?
+  name            String
+  sourceType      String
+  licenseName     String?
+  licenseUrl      String?
+  sourceYear      Int?
+  attributionText String?
+  metadata        Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([villageId])
+}
+
+model GisImportJob {
+  id            String   @id @default(cuid())
+  villageId     String?
+  targetLayer   String
+  fileName      String
+  fileFormat    String
+  status        String   @default("PENDING")
+  totalFeatures Int      @default(0)
+  importedCount Int      @default(0)
+  skippedCount  Int      @default(0)
+  errorSummary  String?  @db.Text
+  createdBy     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([villageId])
+}
+
+model GisChangeLog {
+  id               String   @id @default(cuid())
+  villageId        String?
+  entityType       String
+  entityId         String
+  action           String
+  actorId          String?
+  actorName        String?
+  previousSnapshot Json?
+  newSnapshot      Json?
+  note             String?  @db.Text
+  createdAt        DateTime @default(now())
+
+  @@index([villageId, entityType])
+}
+

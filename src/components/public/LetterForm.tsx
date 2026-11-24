@@ -1897,7 +1897,7 @@ export const LetterForm: React.FC<LetterFormProps> = ({ onBackToCatalog, onTrack
                               </div>
                               <input
                                 placeholder="Contoh: Utara / Barat Laut"
-                                className="w-full text-xs px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-1.5 focus:ring-emerald-600 bg-white font-medium text-slate-800"
+                                className="w-full text-xs px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-1.5 focus:ring-emerald-600 bg-white font-medium text-slate-800 placeholder:text-slate-400"
                                 value={boundary.direction || ''}
                                 onChange={(e) => handleUpdateBoundary(index, 'direction', e.target.value)}
                               />
@@ -1912,7 +1912,7 @@ export const LetterForm: React.FC<LetterFormProps> = ({ onBackToCatalog, onTrack
                               <input
                                 type="text"
                                 placeholder="Panjang (Meter)"
-                                className="w-full text-xs px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-1.5 focus:ring-emerald-600 bg-white font-mono text-slate-800"
+                                className="w-full text-xs px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-1.5 focus:ring-emerald-600 bg-white font-mono text-slate-800 placeholder:text-slate-400"
                                 value={boundary.length ?? boundary.panjang ?? ''}
                                 onChange={(e) => handleUpdateBoundary(index, 'length', e.target.value)}
                               />
@@ -1927,7 +1927,7 @@ export const LetterForm: React.FC<LetterFormProps> = ({ onBackToCatalog, onTrack
                                 </div>
                                 <input
                                   placeholder="-1.642100, 103.385100"
-                                  className="w-full text-xs px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-1.5 focus:ring-emerald-600 bg-white font-mono text-slate-800"
+                                  className="w-full text-xs px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-1.5 focus:ring-emerald-600 bg-white font-mono text-slate-800 placeholder:text-slate-400"
                                   value={getCoordinateDisplayValue(boundary)}
                                   onChange={(e) => handleCoordinateChange(index, e.target.value)}
                                   onBlur={(e) => handleCoordinateBlur(index, e.target.value)}
@@ -1944,7 +1944,7 @@ export const LetterForm: React.FC<LetterFormProps> = ({ onBackToCatalog, onTrack
                             </label>
                             <input
                               placeholder="Nama Pemilik Tanah Tetangga (Contoh: Bapak Ruslan)"
-                              className="w-full text-xs px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-1.5 focus:ring-emerald-600 bg-white font-medium text-slate-800"
+                              className="w-full text-xs px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-1.5 focus:ring-emerald-600 bg-white font-medium text-slate-800 placeholder:text-slate-400"
                               value={boundary.neighbor || ''}
                               onChange={(e) => handleUpdateBoundary(index, 'neighbor', e.target.value)}
                             />
@@ -2239,7 +2239,7 @@ export const LetterForm: React.FC<LetterFormProps> = ({ onBackToCatalog, onTrack
                           <label className="flex flex-col items-center justify-center p-4 border-2 border-dashed border-slate-300 hover:border-emerald-400 rounded-xl bg-slate-50/30 cursor-pointer text-center">
                             <FileUp className="w-5 h-5 text-slate-400 mb-1" />
                             <span className="text-[10px] font-bold text-slate-700">Pilih Berkas</span>
-                            <input type="file" accept="image/*,application/pdf" onChange={handleHeirsKtpKkSelect} className="hidden" />
+                            <input type="file" accept="image/*,application/pdf" onChange={handleHeirsKtpKkSelect} className="hidden text-slate-950 font-medium bg-white placeholder:text-slate-400" />
                           </label>
                         )}
                         {isUploadingHeirsKtpKk && <div className="absolute inset-0 bg-white/80 rounded-xl flex items-center justify-center text-[10px] font-bold">Mengunggah...</div>}
@@ -2263,7 +2263,7 @@ export const LetterForm: React.FC<LetterFormProps> = ({ onBackToCatalog, onTrack
                           <label className="flex flex-col items-center justify-center p-4 border-2 border-dashed border-slate-300 hover:border-emerald-400 rounded-xl bg-slate-50/30 cursor-pointer text-center">
                             <FileUp className="w-5 h-5 text-slate-400 mb-1" />
                             <span className="text-[10px] font-bold text-slate-700">Pilih Berkas</span>
-                            <input type="file" accept="image/*,application/pdf" onChange={handleDeathCertSelect} className="hidden" />
+                            <input type="file" accept="image/*,application/pdf" onChange={handleDeathCertSelect} className="hidden text-slate-950 font-medium bg-white placeholder:text-slate-400" />
                           </label>
                         )}
                         {isUploadingDeathCert && <div className="absolute inset-0 bg-white/80 rounded-xl flex items-center justify-center text-[10px] font-bold">Mengunggah...</div>}
@@ -2287,7 +2287,7 @@ export const LetterForm: React.FC<LetterFormProps> = ({ onBackToCatalog, onTrack
                           <label className="flex flex-col items-center justify-center p-4 border-2 border-dashed border-slate-300 hover:border-emerald-400 rounded-xl bg-slate-50/30 cursor-pointer text-center">
                             <FileUp className="w-5 h-5 text-slate-400 mb-1" />
                             <span className="text-[10px] font-bold text-slate-700">Pilih Berkas</span>
-                            <input type="file" accept="image/*,application/pdf" onChange={handleMarriageBookSelect} className="hidden" />
+                            <input type="file" accept="image/*,application/pdf" onChange={handleMarriageBookSelect} className="hidden text-slate-950 font-medium bg-white placeholder:text-slate-400" />
                           </label>
                         )}
                         {isUploadingMarriageBook && <div className="absolute inset-0 bg-white/80 rounded-xl flex items-center justify-center text-[10px] font-bold">Mengunggah...</div>}
@@ -2362,7 +2362,7 @@ export const LetterForm: React.FC<LetterFormProps> = ({ onBackToCatalog, onTrack
                         type="file"
                         accept="image/jpeg,image/png,image/jpg,image/webp,application/pdf"
                         onChange={handleKtpSelect}
-                        className="hidden"
+                        className="hidden text-slate-950 font-medium bg-white placeholder:text-slate-400"
                         required={!ktpAttachmentUrl}
                       />
                       <div className="w-10 h-10 rounded-xl bg-slate-100 group-hover:bg-emerald-100 text-slate-500 group-hover:text-emerald-700 flex items-center justify-center transition-colors mb-2">
@@ -2416,7 +2416,7 @@ export const LetterForm: React.FC<LetterFormProps> = ({ onBackToCatalog, onTrack
 
                   {!supportFile && !fileAttachmentUrl ? (
                     <label className="border border-dashed border-slate-300 hover:border-emerald-400 hover:bg-emerald-50/20 rounded-xl p-3 flex items-center justify-between cursor-pointer">
-                      <input type="file" accept="image/jpeg,image/png,image/jpg,image/webp,application/pdf" onChange={handleSupportSelect} className="hidden" />
+                      <input type="file" accept="image/jpeg,image/png,image/jpg,image/webp,application/pdf" onChange={handleSupportSelect} className="hidden text-slate-950 font-medium bg-white placeholder:text-slate-400" />
                       <div className="flex items-center gap-2"><Upload className="w-4 h-4 text-slate-400" /><span className="text-xs text-slate-600">Pilih berkas pendukung</span></div>
                     </label>
                   ) : (

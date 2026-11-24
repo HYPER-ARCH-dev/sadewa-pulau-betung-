@@ -36,6 +36,7 @@ import adminRouter from './routes/admin';
 import platformRouter from './routes/platform';
 import uploadRouter from './routes/upload';
 import aiRouter from './routes/ai';
+import { publicGisRouter, adminGisRouter } from './routes/gis';
 import { SERVER_CONFIG } from './config/constants';
 
 export function createApiApp(): express.Express {
@@ -269,8 +270,10 @@ export function createApiApp(): express.Express {
   app.use('/api/public/contact', publicPostLimiter);
   app.use('/api/public/attendance/*', attendanceLimiter);
   app.use('/api/attendance/*', attendanceLimiter);
+  app.use('/api/public/gis', publicGisRouter);
   app.use('/api/public', publicRouter);
 
+  app.use('/api/admin/gis', adminGisRouter);
   app.use('/api/admin', adminRouter);
   app.use('/api/platform', platformRouter);
   app.use('/api/upload', uploadLimiter, uploadRouter);

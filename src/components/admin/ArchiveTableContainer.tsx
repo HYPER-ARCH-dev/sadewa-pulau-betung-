@@ -201,7 +201,7 @@ export const ArchiveTableContainer: React.FC<ArchiveTableContainerProps> = ({
   };
 
   return (
-    <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-xs space-y-0">
+    <div className="w-full min-w-0 bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-xs space-y-0">
       {/* Header & Filter Controls Bar */}
       <div className="p-5 border-b border-slate-100 bg-slate-50/50 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -302,7 +302,7 @@ export const ArchiveTableContainer: React.FC<ArchiveTableContainerProps> = ({
 
         {/* Legend Petunjuk Warna */}
         <div className="mt-3 flex items-center justify-between text-[11px] text-slate-500 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200/70">
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
             <span className="flex items-center gap-1.5 font-medium">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
               <span>Dokumen Terbit / Selesai</span>
@@ -334,7 +334,7 @@ export const ArchiveTableContainer: React.FC<ArchiveTableContainerProps> = ({
           </button>
         </div>
       )}
-      <div className="overflow-x-auto">
+      <div className="w-full overflow-x-auto">
         <table className="w-full text-left text-xs border-collapse">
           <thead>
             <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase text-[10px] tracking-wider">

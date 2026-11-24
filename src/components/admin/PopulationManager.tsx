@@ -446,7 +446,7 @@ export const PopulationManager: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="w-full min-w-0 space-y-6">
       {/* --- HEADER: Judul & Tombol Aksi Utama --- */}
       <div className="flex flex-wrap items-center justify-between gap-4 bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
         <div className="space-y-1">

@@ -24,7 +24,8 @@ import {
   DeletedServiceRequestRecord,
   BansosRecipient,
   BansosComplaint,
-  BansosStatus
+  BansosStatus,
+  PublicDemographics
 } from '../types';
 import {
   INITIAL_USERS,
@@ -110,6 +111,7 @@ export interface DataContextType {
   setWebGisData: React.Dispatch<React.SetStateAction<LandParcel[]>>;
   bansosRecipients: BansosRecipient[];
   bansosComplaints: BansosComplaint[];
+  demographics: PublicDemographics | null;
   userLikedItems: string[];
   isItemLiked: (id: string) => boolean;
   
@@ -237,6 +239,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [territories, setTerritories] = useState<DusunRecord[]>([]);
   const [bansosRecipients, setBansosRecipients] = useState<BansosRecipient[]>([]);
   const [bansosComplaints, setBansosComplaints] = useState<BansosComplaint[]>([]);
+  const [demographics, setDemographics] = useState<PublicDemographics | null>(null);
   
   // Preferensi user tetap di LocalStorage (Client-only)
   const [userLikedItems, setUserLikedItems] = useState<string[]>(() =>
@@ -448,6 +451,26 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsLoading(true);
     try {
       const bootstrap = await api.getBootstrapData();
+      const isBootstrapEmptyOrOffline =
+        !bootstrap ||
+        (!bootstrap.profile &&
+          (!bootstrap.services || bootstrap.services.length === 0) &&
+          (!bootstrap.news || bootstrap.news.length === 0) &&
+          (!bootstrap.officials || bootstrap.officials.length === 0));
+
+      if (isBootstrapEmptyOrOffline) {
+        setNews((prev) => (prev.length > 0 ? prev : INITIAL_NEWS));
+        setAnnouncements((prev) => (prev.length > 0 ? prev : INITIAL_ANNOUNCEMENTS));
+        setAgendas((prev) => (prev.length > 0 ? prev : INITIAL_AGENDAS));
+        setDevelopmentProjects((prev) => (prev.length > 0 ? prev : INITIAL_DEVELOPMENT_PROJECTS));
+        setOfficials((prev) => (prev.length > 0 ? prev : INITIAL_OFFICIALS));
+        setPotentials((prev) => (prev.length > 0 ? prev : INITIAL_POTENTIALS));
+        setUmkm((prev) => (prev.length > 0 ? prev : INITIAL_UMKM));
+        setFacilities((prev) => (prev.length > 0 ? prev : INITIAL_FACILITIES));
+        setGallery((prev) => (prev.length > 0 ? prev : INITIAL_GALLERY));
+        setTerritories((prev) => (prev.length > 0 ? prev : INITIAL_TERRITORIES));
+      }
+
       if (bootstrap) {
         if (bootstrap.services?.length > 0) {
           const serverServiceIds = new Set(bootstrap.services.map((s: VillageService) => s.id));
@@ -458,7 +481,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (bootstrap.announcements?.length > 0) setAnnouncements(bootstrap.announcements);
         if (bootstrap.agendas?.length > 0) setAgendas(bootstrap.agendas);
         if (bootstrap.projects?.length > 0) setDevelopmentProjects(bootstrap.projects);
-        if (bootstrap.budget) setBudget(bootstrap.budget);
+        if (bootstrap.budgetHistory && bootstrap.budgetHistory.length > 0) {
+          setBudgetHistory(bootstrap.budgetHistory);
+          setBudget(bootstrap.budget || bootstrap.budgetHistory[0]);
+        } else if (bootstrap.budget) {
+          setBudget(bootstrap.budget);
+          setBudgetHistory((prev) => (prev.length > 0 ? prev : [bootstrap.budget]));
+        }
         if (bootstrap.officials?.length > 0) setOfficials(bootstrap.officials);
         if (bootstrap.potentials?.length > 0) setPotentials(bootstrap.potentials);
         if (bootstrap.umkm?.length > 0) setUmkm(bootstrap.umkm);
@@ -466,6 +495,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (bootstrap.gallery?.length > 0) setGallery(bootstrap.gallery);
         if (bootstrap.territories && bootstrap.territories.length > 0) setTerritories(bootstrap.territories);
         if (bootstrap.profile) setVillageProfile((prev) => ({ ...prev, ...bootstrap.profile }));
+        if (bootstrap.demographics) setDemographics(bootstrap.demographics);
       }
 
       const token = getTenantAuthToken();
@@ -1495,7 +1525,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       complaints, news, announcements, agendas, gallery, budget, budgetHistory,
       developmentProjects, potentials, umkm, officials, facilities, auditLogs,
       villageProfile, territories, webGisData, setWebGisData, reloadServerData,
-      bansosRecipients, bansosComplaints, userLikedItems, isItemLiked, addBansosRecipient, bulkAddBansosRecipients, replaceBansosRecipients, updateBansosRecipient,
+      bansosRecipients, bansosComplaints, demographics, userLikedItems, isItemLiked, addBansosRecipient, bulkAddBansosRecipients, replaceBansosRecipients, updateBansosRecipient,
       deleteBansosRecipient, submitBansosComplaint, updateBansosComplaintStatus,
       updateBudget, submitServiceRequest, updateServiceRequestStatus, deleteServiceRequest, bulkDeleteServiceRequests,
       restoreDeletedServiceRequest, findRequestByCode, permanentlyDeleteServiceRequestLog, clearAllDeletedServiceRequests,

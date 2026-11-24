@@ -189,7 +189,10 @@ export async function resolveActiveSupabaseStorageCredentials(): Promise<Resolve
   }
 
   const supabaseUrl = process.env.SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
+  const serviceKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SECRET_KEY ||
+    process.env.SUPABASE_KEY;
   if (!supabaseUrl || !serviceKey) return null;
 
   return {
@@ -197,6 +200,29 @@ export async function resolveActiveSupabaseStorageCredentials(): Promise<Resolve
     serviceKey,
     bucketName: STORAGE_PATHS.SUPABASE_BUCKET,
     isDedicatedBucket: false
+  };
+}
+
+/**
+ * Membangun header autentikasi Supabase Storage yang kompatibel untuk:
+ * - New Secret Keys (`sb_secret_...` non-JWT): cukup kirim via header `apikey`
+ * - Legacy Service Role JWT (`eyJ...`): kirim via `Authorization: Bearer` dan `apikey`
+ */
+function buildSupabaseStorageHeaders(
+  supabaseKey: string,
+  extraHeaders: Record<string, string> = {}
+): Record<string, string> {
+  const trimmed = supabaseKey.trim();
+  if (trimmed.startsWith('sb_secret_')) {
+    return {
+      apikey: trimmed,
+      ...extraHeaders
+    };
+  }
+  return {
+    Authorization: `Bearer ${trimmed}`,
+    apikey: trimmed,
+    ...extraHeaders
   };
 }
 
@@ -220,11 +246,9 @@ export async function generateSignedUrl(relativeOrCloudPath: string, expiresInSe
 
     const response = await fetch(targetUrl, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${supabaseKey}`,
-        apikey: supabaseKey,
+      headers: buildSupabaseStorageHeaders(supabaseKey, {
         'Content-Type': 'application/json'
-      },
+      }),
       body: JSON.stringify({ expiresIn: expiresInSeconds })
     });
 
@@ -261,12 +285,10 @@ async function uploadToCloudStorage(
 
     const response = await fetch(targetUrl, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${supabaseKey}`,
-        apikey: supabaseKey,
+      headers: buildSupabaseStorageHeaders(supabaseKey, {
         'Content-Type': mimeType,
         'x-upsert': 'true'
-      },
+      }),
       body: buffer
     });
 
@@ -329,11 +351,9 @@ export async function clearSupabaseStorageBucket(tenantPrefix?: string): Promise
       while (hasMore) {
         const listRes = await fetch(`${cleanUrl}/storage/v1/object/list/${bucketName}`, {
           method: 'POST',
-          headers: {
-            Authorization: `Bearer ${supabaseKey}`,
-            apikey: supabaseKey,
+          headers: buildSupabaseStorageHeaders(supabaseKey, {
             'Content-Type': 'application/json'
-          },
+          }),
           body: JSON.stringify({ prefix, limit: 1000, offset: 0 })
         });
 
@@ -352,11 +372,9 @@ export async function clearSupabaseStorageBucket(tenantPrefix?: string): Promise
         const prefixesToDelete = files.map((f) => `${prefix}/${f.name}`);
         const delRes = await fetch(`${cleanUrl}/storage/v1/object/${bucketName}`, {
           method: 'DELETE',
-          headers: {
-            Authorization: `Bearer ${supabaseKey}`,
-            apikey: supabaseKey,
+          headers: buildSupabaseStorageHeaders(supabaseKey, {
             'Content-Type': 'application/json'
-          },
+          }),
           body: JSON.stringify({ prefixes: prefixesToDelete })
         });
 

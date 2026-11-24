@@ -30,7 +30,8 @@ import {
   User,
   VillageProfile,
   DusunRecord,
-  DeletedServiceRequestRecord
+  DeletedServiceRequestRecord,
+  PublicDemographics
 } from '../types';
 import { Resident } from '../types/resident';
 import { compressImage, isImageFile, formatFileSize } from '../utils/imageCompressor';
@@ -116,12 +117,14 @@ export const api = {
     agendas: AgendaItem[];
     projects: DevelopmentProject[];
     budget: BudgetYearData;
+    budgetHistory?: BudgetYearData[];
     officials: VillageOfficial[];
     potentials: VillagePotential[];
     umkm: UmkmItem[];
     facilities: MapFacility[];
     gallery: GalleryItem[];
     territories?: DusunRecord[];
+    demographics?: PublicDemographics | null;
   } | null> {
     let retries = 3;
     while (retries > 0) {
@@ -140,6 +143,24 @@ export const api = {
       }
     }
     return null;
+  },
+
+  async getPublicDemographics(): Promise<ApiResponse<PublicDemographics>> {
+    try {
+      const res = await fetch(`${BASE_URL}/public/demographics`);
+      return processResponse<PublicDemographics>(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async getPublicBudgets(): Promise<ApiResponse<BudgetYearData[]>> {
+    try {
+      const res = await fetch(`${BASE_URL}/public/budgets`);
+      return processResponse<BudgetYearData[]>(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
   },
 
   // 2. Authentication
@@ -934,6 +955,89 @@ export const api = {
         body: JSON.stringify({ isPublic })
       });
       return processResponse<Complaint>(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async getAdminComplaints(): Promise<{ success: boolean; data?: any[]; error?: string }> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/complaints`, { headers: getAuthHeaders() });
+      return processResponse(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async getPublicComplaints(): Promise<{ success: boolean; data?: any[]; error?: string }> {
+    try {
+      const res = await fetch(`${BASE_URL}/public/complaints/public`);
+      return processResponse(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async getPublicPosyanduSummary(): Promise<{ success: boolean; data?: any; error?: string }> {
+    try {
+      const res = await fetch(`${BASE_URL}/public/posyandu/summary`);
+      return processResponse(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async lookupPublicKms(q: string): Promise<{ success: boolean; data?: any; error?: string }> {
+    try {
+      const res = await fetch(`${BASE_URL}/public/posyandu/kms?q=${encodeURIComponent(q)}`);
+      return processResponse(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async getPosyanduSchedules(): Promise<{ success: boolean; data?: any[]; error?: string }> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/posyandu/schedules`, { headers: getAuthHeaders() });
+      return processResponse(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async addPosyanduSchedule(data: any): Promise<{ success: boolean; data?: any; error?: string }> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/posyandu/schedules`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(data)
+      });
+      return processResponse(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async updatePosyanduSchedule(id: string, data: any): Promise<{ success: boolean; data?: any; error?: string }> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/posyandu/schedules/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(data)
+      });
+      return processResponse(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async deletePosyanduSchedule(id: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/posyandu/schedules/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
+      });
+      return processResponse(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { motion } from 'motion/react';
 import { useApp } from '../../context/AppContext';
 import { Users, Award, ShieldCheck, Mail, Phone, Building2, User } from 'lucide-react';
 
@@ -108,14 +109,18 @@ export const GovernmentView: React.FC = () => {
 
       {/* Kepala Desa Spotlight */}
       {kepalaDesa && (
-        <div className="bg-gradient-to-r from-emerald-900 to-slate-900 text-white rounded-3xl p-6 sm:p-10 shadow-xl overflow-hidden relative">
+        <motion.div
+          whileHover={{ y: -4 }}
+          transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+          className="bg-gradient-to-r from-emerald-900 to-slate-900 text-white rounded-3xl p-6 sm:p-10 shadow-xl hover:shadow-[0_24px_50px_-12px_rgba(16,185,129,0.35)] border border-emerald-700/30 hover:border-emerald-400/50 transition-all overflow-hidden relative group"
+        >
           <div className="flex flex-col md:flex-row items-center gap-8">
-            <div className="w-36 h-36 sm:w-44 sm:h-44 rounded-2xl overflow-hidden shrink-0 border-4 border-emerald-500/40 shadow-2xl bg-slate-800 flex items-center justify-center">
+            <div className="w-36 h-36 sm:w-44 sm:h-44 rounded-2xl overflow-hidden shrink-0 border-4 border-emerald-500/40 group-hover:border-emerald-400 shadow-2xl bg-slate-800 flex items-center justify-center transition-all duration-500 group-hover:scale-105">
               {kepalaDesa.imageUrl && kepalaDesa.imageUrl.trim() !== '' ? (
                 <img
                   src={kepalaDesa.imageUrl.trim()}
                   alt={kepalaDesa.name}
-                  className="w-full h-full object-cover"
+                  className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
                 />
               ) : (
                 <div className="flex flex-col items-center justify-center text-slate-400 p-2 text-center">
@@ -140,7 +145,7 @@ export const GovernmentView: React.FC = () => {
               </p>
             </div>
           </div>
-        </div>
+        </motion.div>
       )}
 
       {/* Grid of Other Officials */}
@@ -148,25 +153,27 @@ export const GovernmentView: React.FC = () => {
         {filteredOfficials
           .filter((o) => o.section !== 'kepala_desa')
           .map((official) => (
-            <div
+            <motion.div
               key={official.id}
-              className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm hover:border-emerald-400 transition-all flex flex-col justify-between"
+              whileHover={{ y: -6 }}
+              transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+              className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-[0_18px_38px_-12px_rgba(16,185,129,0.22)] hover:border-emerald-400 transition-all flex flex-col justify-between group"
             >
               <div className="p-6 space-y-4">
                 <div className="flex items-center space-x-4">
-                  <div className="w-16 h-16 rounded-2xl overflow-hidden shrink-0 border border-slate-200 bg-slate-100 flex items-center justify-center">
+                  <div className="w-16 h-16 rounded-2xl overflow-hidden shrink-0 border border-slate-200 group-hover:border-emerald-400 bg-slate-100 flex items-center justify-center transition-all duration-300 group-hover:scale-105 group-hover:rotate-2 shadow-2xs">
                     {official.imageUrl && official.imageUrl.trim() !== '' ? (
                       <img
                         src={official.imageUrl.trim()}
                         alt={official.name}
-                        className="w-full h-full object-cover"
+                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
                       />
                     ) : (
-                      <User className="w-8 h-8 text-slate-400" />
+                      <User className="w-8 h-8 text-slate-400 group-hover:text-emerald-600 transition-colors" />
                     )}
                   </div>
-                  <div>
-                    <h3 className="font-bold text-sm text-slate-900 leading-snug">{official.name}</h3>
+                  <div className="min-w-0">
+                    <h3 className="font-bold text-sm text-slate-900 leading-snug group-hover:text-emerald-800 transition-colors">{official.name}</h3>
                     <div className="text-xs font-semibold text-emerald-700 mt-0.5">
                       {official.position}
                     </div>
@@ -184,7 +191,7 @@ export const GovernmentView: React.FC = () => {
                   {official.section.replace('_', ' ')}
                 </span>
               </div>
-            </div>
+            </motion.div>
           ))}
       </div>
 

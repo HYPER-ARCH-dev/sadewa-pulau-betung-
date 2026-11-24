@@ -97,6 +97,7 @@ export interface TokenPayload {
   username: string;
   role: StaffRole;
   name: string;
+  permissions?: string[] | Record<string, boolean>;
   tokenVersion: number;
   exp: number;
 }
@@ -262,11 +263,18 @@ export const authenticateToken: RequestHandler = async (req: Request, res: Respo
       return;
     }
 
+    const resolvedPermissions = Array.isArray(user.permissions)
+      ? (user.permissions as string[])
+      : user.permissions && typeof user.permissions === 'object'
+      ? (user.permissions as Record<string, boolean>)
+      : [];
+
     authReq.user = {
       ...payload,
       scope: 'tenant',
       tenantId: user.villageId ?? payload.tenantId ?? activeCtx?.tenantId ?? null,
-      role: user.role as any
+      role: user.role as any,
+      permissions: resolvedPermissions
     };
     next();
   } catch (error: any) {
@@ -293,6 +301,48 @@ export function requireRoles(...allowedRoles: Array<'super_admin' | 'admin_desa'
     }
 
     next();
+  };
+}
+
+export function hasModulePermission(
+  permissions: TokenPayload['permissions'],
+  requiredModules: string[]
+): boolean {
+  if (!permissions || requiredModules.length === 0) return false;
+  if (Array.isArray(permissions)) {
+    return requiredModules.some((mod) => permissions.includes(mod));
+  }
+  if (typeof permissions === 'object') {
+    return requiredModules.some((mod) => (permissions as Record<string, boolean>)[mod] === true);
+  }
+  return false;
+}
+
+export function requireRolesOrPermission(
+  allowedRoles: Array<'super_admin' | 'admin_desa' | 'operator' | 'editor' | 'admin_posyandu'>,
+  requiredModules: string[] = []
+): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const authReq = req as AuthenticatedRequest;
+    if (!authReq.user) {
+      res.status(401).json({ success: false, error: 'Diperlukan autentikasi petugas.' });
+      return;
+    }
+
+    if (allowedRoles.includes(authReq.user.role as any)) {
+      next();
+      return;
+    }
+
+    if (hasModulePermission(authReq.user.permissions, requiredModules)) {
+      next();
+      return;
+    }
+
+    res.status(403).json({
+      success: false,
+      error: `Akses ditolak. Peran '${authReq.user.role}' tidak memiliki izin untuk modul ini.`
+    });
   };
 }
 

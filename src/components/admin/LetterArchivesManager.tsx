@@ -74,7 +74,10 @@ export const LetterArchivesManager: React.FC<LetterArchivesManagerProps> = ({
   onBulkDeleteRequest
 }) => {
   const { villageProfile, addToast, deletedRequests } = useApp();
-  const sadewaLogoUrl = villageProfile?.heroBackgroundUrl?.trim() || '/images/hero-pulau-betung.webp';
+  const sadewaLogoUrl =
+    villageProfile?.sadewaLogoUrl?.trim() ||
+    villageProfile?.heroBackgroundUrl?.trim() ||
+    '/favicon.svg';
 
   // State Filter & View Mode
   const [viewMode, setViewMode] = useState<'folders' | 'table' | 'deleted_logs'>('folders');
@@ -342,9 +345,9 @@ export const LetterArchivesManager: React.FC<LetterArchivesManagerProps> = ({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="w-full min-w-0 space-y-6">
       {/* Top Banner Card with SADEWA Watermark Branding */}
-      <div className="relative overflow-hidden bg-gradient-to-r from-slate-900 via-slate-800 to-emerald-950 rounded-3xl p-6 text-white shadow-md border border-slate-700/50">
+      <div className="w-full min-w-0 relative overflow-hidden bg-gradient-to-r from-slate-900 via-slate-800 to-emerald-950 rounded-3xl p-5 sm:p-6 text-white shadow-md border border-slate-700/50">
         {/* Watermark Logo SADEWA Background Layer (Inverted White at ~10% Opacity) */}
         {sadewaLogoUrl && (
           <div className="absolute right-0 top-0 bottom-0 w-full sm:w-2/3 md:w-1/2 pointer-events-none select-none overflow-hidden flex items-center justify-end pr-2 sm:pr-6 z-0">
@@ -498,7 +501,7 @@ export const LetterArchivesManager: React.FC<LetterArchivesManagerProps> = ({
       ) : (
         <>
           {/* Filter and Control Bar */}
-      <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-xs space-y-4">
+      <div className="w-full min-w-0 bg-white rounded-3xl border border-slate-200 p-4 sm:p-5 shadow-xs space-y-4 overflow-hidden">
         {/* Row 1: Search & Dropdowns */}
         <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
           {/* Search Box */}
@@ -554,8 +557,8 @@ export const LetterArchivesManager: React.FC<LetterArchivesManagerProps> = ({
         </div>
 
         {/* Row 2: Pills for Letter Types */}
-        <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-3 overflow-x-auto pb-1">
-          <div className="flex items-center gap-1.5 flex-nowrap">
+        <div className="pt-2.5 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 w-full min-w-0">
+          <div className="flex items-center gap-1.5 flex-nowrap md:flex-wrap overflow-x-auto pb-1 md:pb-0 flex-1 min-w-0">
             <button
               onClick={() => setSelectedTypeFilter('all')}
               className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-colors flex items-center gap-1.5 ${
@@ -607,7 +610,7 @@ export const LetterArchivesManager: React.FC<LetterArchivesManagerProps> = ({
           </div>
 
           {viewMode === 'folders' && (
-            <div className="flex items-center gap-1.5 shrink-0 text-xs">
+            <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-auto text-xs">
               <button
                 onClick={expandAllFolders}
                 className="px-2.5 py-1 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg text-[11px] font-bold transition-colors"
@@ -630,7 +633,7 @@ export const LetterArchivesManager: React.FC<LetterArchivesManagerProps> = ({
 
       {/* VIEW MODE 1: FOLDER ARSIP TERKELOMPOK (SMART ACCORDION) */}
       {viewMode === 'folders' && (
-        <div className="space-y-4">
+        <div className="w-full min-w-0 space-y-3">
           {filteredGroups.length === 0 ? (
             <div className="p-12 text-center bg-white rounded-3xl border border-slate-200 text-slate-500 space-y-2">
               <Folder className="w-10 h-10 text-slate-300 mx-auto" />
@@ -644,7 +647,7 @@ export const LetterArchivesManager: React.FC<LetterArchivesManagerProps> = ({
               return (
                 <div
                   key={group.label}
-                  className={`bg-white rounded-3xl border transition-all overflow-hidden shadow-xs ${
+                  className={`w-full min-w-0 bg-white rounded-2xl sm:rounded-3xl border transition-all overflow-hidden shadow-xs ${
                     hasActiveQueue
                       ? 'border-amber-200/80 hover:border-amber-300'
                       : 'border-slate-200 hover:border-slate-300'
@@ -653,13 +656,13 @@ export const LetterArchivesManager: React.FC<LetterArchivesManagerProps> = ({
                   {/* Folder Header */}
                   <div
                     onClick={() => toggleFolder(group.label)}
-                    className={`p-5 cursor-pointer select-none transition-colors flex flex-col md:flex-row md:items-center justify-between gap-4 ${
-                      isExpanded ? 'bg-slate-50' : 'bg-slate-50/50 hover:bg-slate-50/90'
+                    className={`p-4 sm:p-5 cursor-pointer select-none transition-colors flex flex-col md:flex-row md:items-center justify-between gap-3 sm:gap-4 ${
+                      isExpanded ? 'bg-slate-50/90' : 'bg-white hover:bg-slate-50/70'
                     }`}
                   >
-                    <div className="flex items-start sm:items-center space-x-3.5">
+                    <div className="flex items-start sm:items-center space-x-3 sm:space-x-3.5 min-w-0">
                       <div
-                        className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 shadow-2xs transition-colors ${
+                        className={`w-10 h-10 sm:w-11 sm:h-11 rounded-2xl flex items-center justify-center shrink-0 shadow-2xs transition-colors ${
                           hasActiveQueue
                             ? 'bg-amber-100 text-amber-900'
                             : 'bg-emerald-100 text-emerald-800'
@@ -671,7 +674,7 @@ export const LetterArchivesManager: React.FC<LetterArchivesManagerProps> = ({
                           <Folder className="w-5 h-5" />
                         )}
                       </div>
-                      <div>
+                      <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="px-2 py-0.5 rounded-md bg-emerald-700 text-white font-mono text-[10px] font-extrabold uppercase">
                             Kode {group.code}
@@ -701,7 +704,7 @@ export const LetterArchivesManager: React.FC<LetterArchivesManagerProps> = ({
                     </div>
 
                     {/* Right side stats & toggle */}
-                    <div className="flex items-center justify-between md:justify-end gap-3 shrink-0">
+                    <div className="flex flex-wrap items-center justify-between md:justify-end gap-2 sm:gap-3 shrink-0">
                       <div className="flex items-center gap-2 text-xs">
                         <span className="px-2.5 py-1 rounded-xl bg-slate-100 text-slate-700 font-bold">
                           {group.items.length} Berkas
@@ -743,8 +746,8 @@ export const LetterArchivesManager: React.FC<LetterArchivesManagerProps> = ({
                         transition={{ duration: 0.22, ease: [0.04, 0.62, 0.23, 0.98] }}
                         className="overflow-hidden"
                       >
-                        <div className="p-0 sm:p-2 border-t border-slate-100">
-                          <div className="overflow-x-auto">
+                        <div className="w-full min-w-0 p-0 sm:p-2 border-t border-slate-100">
+                          <div className="w-full overflow-x-auto">
                             <table className="w-full text-left text-xs border-collapse">
                               <thead>
                                 <tr className="bg-slate-50/90 text-slate-500 font-bold uppercase text-[10px] tracking-wider border-b border-slate-100">
@@ -890,7 +893,7 @@ export const LetterArchivesManager: React.FC<LetterArchivesManagerProps> = ({
         </>
       )}
       {/* Legal Reference & Regulatory Basis Box */}
-      <div className="bg-slate-900 text-slate-200 rounded-2xl p-6 border border-slate-800 space-y-4">
+      <div className="w-full min-w-0 bg-slate-900 text-slate-200 rounded-2xl p-5 sm:p-6 border border-slate-800 space-y-4">
         <div className="flex items-center space-x-2 text-emerald-400">
           <BookOpen className="w-5 h-5" />
           <h3 className="text-sm font-bold uppercase tracking-wider">

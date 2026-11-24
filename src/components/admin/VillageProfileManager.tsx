@@ -206,7 +206,12 @@ export const VillageProfileManager: React.FC = () => {
     if (e) e.preventDefault();
     setIsSaving(true);
     try {
-      await updateVillageProfile(formData);
+      const payload: Partial<VillageProfile> = { ...formData };
+      if (currentUser?.role !== 'super_admin') {
+        delete payload.sadewaLogoUrl;
+        delete payload.sadewaIconUrl;
+      }
+      await updateVillageProfile(payload);
       addToast('success', 'Profil Desa Diperbarui', 'Seluruh data profil desa telah berhasil disimpan secara permanen ke database.');
     } catch (err: unknown) {
       console.error('Submit profile error:', err);

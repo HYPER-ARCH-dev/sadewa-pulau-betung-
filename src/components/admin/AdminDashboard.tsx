@@ -51,6 +51,9 @@ import {
   TrendingUp,
   Home
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { AnimatedCounter } from '../common/AnimatedCounter';
+import { AnimatedLoadingBar } from '../common/AnimatedProgressBar';
 import { ServiceStatusBadge, ComplaintStatusBadge } from '../common/StatusBadge';
 import { OfficialsManager } from './OfficialsManager';
 import { VillageProfileManager } from './VillageProfileManager';
@@ -511,10 +514,10 @@ export const AdminDashboard: React.FC = () => {
 
 
   return (
-    <div className="min-h-screen bg-slate-100/70 pb-16 relative">
+    <div className="min-h-screen w-full overflow-x-clip bg-slate-100 text-slate-900 pb-16 relative">
       {/* 1. Main Admin Header (Sticky for better usability) */}
-      <div className="sticky top-0 z-[50] bg-slate-900 text-white border-b border-slate-800 px-4 sm:px-8 py-3.5 shadow-lg w-full">
-        <div className="w-full flex items-center justify-between flex-col sm:flex-row gap-3">
+      <div className="sticky top-0 z-[50] bg-slate-900/95 backdrop-blur-md text-white border-b border-slate-800/90 px-4 sm:px-8 py-3.5 shadow-lg w-full transition-colors">
+        <div className="w-full flex items-center justify-between flex-col sm:flex-row gap-3 min-w-0">
           <div className="flex items-center space-x-3">
             <button
               onClick={() => setIsAdminSidebarOpen(true)}
@@ -598,7 +601,7 @@ export const AdminDashboard: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center space-x-2">
+          <div className="flex flex-wrap items-center justify-center sm:justify-end gap-2 w-full sm:w-auto">
             <button
               onClick={() => navigateTo('beranda')}
               className="px-3.5 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-bold border border-emerald-500/30 transition-all cursor-pointer inline-flex items-center space-x-1.5 shadow-sm active:scale-95"
@@ -667,8 +670,8 @@ export const AdminDashboard: React.FC = () => {
       </div>
 
       {/* Main Admin Content Container */}
-      <div className="px-4 sm:px-6 lg:px-8 pt-8 min-h-[500px] w-full">
-        <div className="flex flex-col lg:flex-row gap-8 items-start">
+      <div className="px-4 sm:px-6 lg:px-8 pt-6 sm:pt-8 min-h-[500px] w-full max-w-full">
+        <div className="flex flex-col lg:flex-row gap-6 lg:gap-8 items-start w-full min-w-0">
           {/* Sidebar Component */}
           <AdminSidebar
             activeTab={activeTab}
@@ -687,9 +690,10 @@ export const AdminDashboard: React.FC = () => {
           />
 
           {/* Main Tab Content */}
-          <div className="flex-1 min-w-0 space-y-6">
+          <div className="w-full flex-1 min-w-0 space-y-6">
             {adminIsLoading ? (
           <div className="space-y-6">
+            <AnimatedLoadingBar label="Menyinkronkan Data Dashboard..." />
             {activeTab === 'overview' ? (
               <>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -714,7 +718,13 @@ export const AdminDashboard: React.FC = () => {
             )}
           </div>
         ) : (
-          <>
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+            className="w-full min-w-0 space-y-6"
+          >
             {/* TAB 1: OVERVIEW */}
             {activeTab === 'overview' && (
           <div className="space-y-6">
@@ -734,34 +744,34 @@ export const AdminDashboard: React.FC = () => {
               </div>
 
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="bg-white rounded-2xl border border-slate-100 p-4 shadow-2xs space-y-1 hover:border-emerald-300 transition-colors cursor-pointer" onClick={() => setActiveTab('residents')}>
+                <div className="bg-white rounded-2xl border border-slate-100 p-4 shadow-2xs space-y-1 hover:border-emerald-300 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 cursor-pointer group" onClick={() => setActiveTab('residents')}>
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Total Penduduk</span>
                   <div className="text-xl font-black text-slate-900 font-mono flex items-baseline gap-1">
-                    {sensusStats.totalPenduduk.toLocaleString('id-ID')} <span className="text-[10px] font-bold text-slate-400">Jiwa</span>
+                    <AnimatedCounter value={sensusStats.totalPenduduk} /> <span className="text-[10px] font-bold text-slate-400">Jiwa</span>
                   </div>
                   <div className="text-[10px] text-slate-500">Warga berstatus Hidup</div>
                 </div>
 
-                <div className="bg-white rounded-2xl border border-slate-100 p-4 shadow-2xs space-y-1 hover:border-emerald-300 transition-colors cursor-pointer" onClick={() => setActiveTab('residents')}>
+                <div className="bg-white rounded-2xl border border-slate-100 p-4 shadow-2xs space-y-1 hover:border-emerald-300 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 cursor-pointer group" onClick={() => setActiveTab('residents')}>
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Total KK</span>
                   <div className="text-xl font-black text-slate-900 font-mono flex items-baseline gap-1">
-                    {sensusStats.totalKK.toLocaleString('id-ID')} <span className="text-[10px] font-bold text-slate-400">Kepala</span>
+                    <AnimatedCounter value={sensusStats.totalKK} /> <span className="text-[10px] font-bold text-slate-400">Kepala</span>
                   </div>
                   <div className="text-[10px] text-slate-500">Keluarga terdaftar</div>
                 </div>
 
-                <div className="bg-white rounded-2xl border border-slate-100 p-4 shadow-2xs space-y-1 hover:border-emerald-300 transition-colors cursor-pointer" onClick={() => setActiveTab('bansos')}>
+                <div className="bg-white rounded-2xl border border-slate-100 p-4 shadow-2xs space-y-1 hover:border-emerald-300 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 cursor-pointer group" onClick={() => setActiveTab('bansos')}>
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Penerima Bansos Aktif</span>
                   <div className="text-xl font-black text-slate-900 font-mono flex items-baseline gap-1">
-                    {sensusStats.activeBansos.toLocaleString('id-ID')} <span className="text-[10px] font-bold text-slate-400">KPM</span>
+                    <AnimatedCounter value={sensusStats.activeBansos} /> <span className="text-[10px] font-bold text-slate-400">KPM</span>
                   </div>
                   <div className="text-[10px] text-emerald-700 font-semibold">Tersinkronisasi NIK</div>
                 </div>
 
-                <div className="bg-white rounded-2xl border border-slate-100 p-4 shadow-2xs space-y-1 hover:border-emerald-300 transition-colors cursor-pointer" onClick={() => setActiveTab('posyandu')}>
+                <div className="bg-white rounded-2xl border border-slate-100 p-4 shadow-2xs space-y-1 hover:border-emerald-300 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 cursor-pointer group" onClick={() => setActiveTab('posyandu')}>
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Jumlah Balita</span>
                   <div className="text-xl font-black text-slate-900 font-mono flex items-baseline gap-1">
-                    {sensusStats.totalBalita.toLocaleString('id-ID')} <span className="text-[10px] font-bold text-slate-400">Anak</span>
+                    <AnimatedCounter value={sensusStats.totalBalita} /> <span className="text-[10px] font-bold text-slate-400">Anak</span>
                   </div>
                   <div className="text-[10px] text-slate-500">Rentang usia ≤ 5 tahun</div>
                 </div>
@@ -770,43 +780,51 @@ export const AdminDashboard: React.FC = () => {
 
             {/* Top Stat Cards (Administratif) */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-2 cursor-pointer hover:border-slate-300 transition-colors" onClick={() => setActiveTab('services')}>
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-2 cursor-pointer hover:border-slate-300 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 group" onClick={() => setActiveTab('services')}>
                 <div className="flex items-center justify-between text-slate-500 text-xs">
                   <span>Permohonan Menunggu</span>
-                  <Clock className="w-4 h-4 text-amber-600" />
+                  <Clock className="w-4 h-4 text-amber-600 group-hover:scale-110 transition-transform duration-200" />
                 </div>
-                <div className="text-2xl font-black text-slate-900">{serviceRequests.filter(r => r.status === 'diajukan').length} Surat Pending</div>
+                <div className="text-2xl font-black text-slate-900">
+                  <AnimatedCounter value={serviceRequests.filter(r => r.status === 'diajukan').length} suffix=" Surat Pending" />
+                </div>
                 <div className="text-[11px] text-amber-700 font-semibold">
                   Perlu verifikasi & tandatangan
                 </div>
               </div>
 
-              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-2 cursor-pointer hover:border-slate-300 transition-colors" onClick={() => setActiveTab('complaints')}>
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-2 cursor-pointer hover:border-slate-300 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 group" onClick={() => setActiveTab('complaints')}>
                 <div className="flex items-center justify-between text-slate-500 text-xs">
                   <span>Aspirasi & Laporan Aktif</span>
-                  <AlertCircle className="w-4 h-4 text-rose-600" />
+                  <AlertCircle className="w-4 h-4 text-rose-600 group-hover:scale-110 transition-transform duration-200" />
                 </div>
-                <div className="text-2xl font-black text-slate-900">{complaints.filter(c => c.status !== 'selesai' && c.status !== 'ditolak').length} Pengaduan Baru</div>
+                <div className="text-2xl font-black text-slate-900">
+                  <AnimatedCounter value={complaints.filter(c => c.status !== 'selesai' && c.status !== 'ditolak').length} suffix=" Pengaduan Baru" />
+                </div>
                 <div className="text-[11px] text-slate-500">Infrastruktur & Pelayanan</div>
               </div>
 
-              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-2 cursor-pointer hover:border-slate-300 transition-colors" onClick={() => setActiveTab('apbdes')}>
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-2 cursor-pointer hover:border-slate-300 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 group" onClick={() => setActiveTab('apbdes')}>
                 <div className="flex items-center justify-between text-slate-500 text-xs">
                   <span>Realisasi APBDes</span>
-                  <BarChart3 className="w-4 h-4 text-emerald-600" />
+                  <BarChart3 className="w-4 h-4 text-emerald-600 group-hover:scale-110 transition-transform duration-200" />
                 </div>
-                <div className="text-2xl font-black text-slate-900">{budget.realizationPercentage}%</div>
+                <div className="text-2xl font-black text-slate-900">
+                  <AnimatedCounter value={Number(budget.realizationPercentage) || 0} decimals={String(budget.realizationPercentage).includes('.') ? 1 : 0} suffix="%" />
+                </div>
                 <div className="text-[11px] text-emerald-700 font-semibold">
                   Dari Rp {budget.totalExpenditure.toLocaleString('id-ID')}
                 </div>
               </div>
 
-              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-2 cursor-pointer hover:border-slate-300 transition-colors" onClick={() => setActiveTab('audit')}>
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-2 cursor-pointer hover:border-slate-300 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 group" onClick={() => setActiveTab('audit')}>
                 <div className="flex items-center justify-between text-slate-500 text-xs">
                   <span>Audit Trail Terdata</span>
-                  <ShieldCheck className="w-4 h-4 text-blue-600" />
+                  <ShieldCheck className="w-4 h-4 text-blue-600 group-hover:scale-110 transition-transform duration-200" />
                 </div>
-                <div className="text-2xl font-black text-slate-900">{auditLogs.length} Aksi</div>
+                <div className="text-2xl font-black text-slate-900">
+                  <AnimatedCounter value={auditLogs.length} suffix=" Aksi" />
+                </div>
                 <div className="text-[11px] text-blue-700 font-semibold">Terekam di sistem keamanan</div>
               </div>
             </div>
@@ -1531,21 +1549,32 @@ export const AdminDashboard: React.FC = () => {
 
         {/* TAB: PEMELIHARAAN & BACKUP SISTEM (SUPER ADMIN) */}
         {activeTab === 'backup' && <BackupManager />}
-      </>
+      </motion.div>
     )}
   </div>
 </div>
 </div>
 
       {/* SERVICE ACTION MODAL */}
+      <AnimatePresence>
       {selectedRequest && (
         <div className="fixed inset-0 z-[100] overflow-y-auto p-4 flex items-center justify-center">
-          <div
-            className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm transition-opacity"
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm"
             onClick={() => setSelectedRequest(null)}
           />
 
-          <div className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden z-10 p-6 sm:p-8 space-y-5 animate-in fade-in zoom-in-95 duration-150">
+          <motion.div
+            initial={{ opacity: 0, y: 14, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 10, scale: 0.96 }}
+            transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+            className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden z-10 p-6 sm:p-8 space-y-5"
+          >
             <div className="flex items-start justify-between border-b border-slate-100 pb-3">
               <div>
                 <span className="font-mono text-xs font-bold text-emerald-800">
@@ -1879,19 +1908,31 @@ export const AdminDashboard: React.FC = () => {
                 </div>
               </div>
             </form>
-          </div>
+          </motion.div>
         </div>
       )}
+      </AnimatePresence>
 
       {/* COMPLAINT ACTION MODAL */}
+      <AnimatePresence>
       {selectedComplaint && (
         <div className="fixed inset-0 z-[100] overflow-y-auto p-4 flex items-center justify-center">
-          <div
-            className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm transition-opacity"
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm"
             onClick={() => setSelectedComplaint(null)}
           />
 
-          <div className="relative w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden z-10 p-6 sm:p-8 space-y-5 animate-in fade-in zoom-in-95 duration-150">
+          <motion.div
+            initial={{ opacity: 0, y: 14, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 10, scale: 0.96 }}
+            transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+            className="relative w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden z-10 p-6 sm:p-8 space-y-5"
+          >
             <div className="flex items-start justify-between border-b border-slate-100 pb-3">
               <div>
                 <span className="font-mono text-xs font-bold text-amber-800">
@@ -2015,9 +2056,10 @@ export const AdminDashboard: React.FC = () => {
                 </button>
               </div>
             </form>
-          </div>
+          </motion.div>
         </div>
       )}
+      </AnimatePresence>
       {/* OFFICIAL LETTER PRINT MODAL */}
       {printModalRequest && (
         <OfficialLetterPrintModal
@@ -2029,13 +2071,24 @@ export const AdminDashboard: React.FC = () => {
       )}
 
       {/* ADMIN KTP & ATTACHMENT FULL RESOLUTION MODAL */}
+      <AnimatePresence>
       {adminPreviewImage && (
         <div className="fixed inset-0 z-[100] overflow-y-auto p-4 flex items-center justify-center">
-          <div
-            className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm transition-opacity"
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm"
             onClick={() => setAdminPreviewImage(null)}
           />
-          <div className="relative max-w-3xl w-full bg-white rounded-3xl overflow-hidden shadow-2xl z-10 border border-slate-200 animate-in fade-in zoom-in-95">
+          <motion.div
+            initial={{ opacity: 0, y: 12, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.96 }}
+            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+            className="relative max-w-3xl w-full bg-white rounded-3xl overflow-hidden shadow-2xl z-10 border border-slate-200"
+          >
             <div className="p-4 bg-slate-900 text-white flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-emerald-400" />
@@ -2071,18 +2124,30 @@ export const AdminDashboard: React.FC = () => {
                 Tutup Pratinjau
               </button>
             </div>
-          </div>
+          </motion.div>
         </div>
       )}
+      </AnimatePresence>
 
       {/* CHANGE PASSWORD MODAL */}
+      <AnimatePresence>
       {isPasswordModalOpen && (
         <div className="fixed inset-0 z-[100] overflow-y-auto p-4 flex items-center justify-center">
-          <div 
-            className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm" 
-            onClick={() => setIsPasswordModalOpen(false)} 
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm"
+            onClick={() => setIsPasswordModalOpen(false)}
           />
-          <div className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl border border-slate-200 z-10 p-6 animate-in fade-in zoom-in-95 duration-150">
+          <motion.div
+            initial={{ opacity: 0, y: 12, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.96 }}
+            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+            className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl border border-slate-200 z-10 p-6"
+          >
             <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
               <div className="flex items-center space-x-2">
                 <Key className="w-5 h-5 text-emerald-700" />
@@ -2175,9 +2240,10 @@ export const AdminDashboard: React.FC = () => {
                 </button>
               </div>
             </div>
-          </div>
+          </motion.div>
         </div>
       )}
+      </AnimatePresence>
     </div>
   );
 };

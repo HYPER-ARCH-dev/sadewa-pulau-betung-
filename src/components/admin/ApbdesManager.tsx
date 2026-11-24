@@ -27,6 +27,7 @@ import {
   RotateCcw
 } from 'lucide-react';
 import { ProjectsManager } from './ProjectsManager';
+import { AnimatedProgressBar } from '../common/AnimatedProgressBar';
 
 // Helper function to dynamically calculate totals from items
 const calculateTotalsFromItems = (data: BudgetYearData): BudgetYearData => {
@@ -400,7 +401,7 @@ export const ApbdesManager: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="w-full min-w-0 space-y-6">
       {/* HEADER SECTION */}
       <div className="bg-gradient-to-r from-emerald-900 via-slate-900 to-slate-950 rounded-3xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden">
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
@@ -627,12 +628,11 @@ export const ApbdesManager: React.FC = () => {
             </div>
 
             {/* Progress bar */}
-            <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden mt-2">
-              <div
-                className="bg-emerald-600 h-full rounded-full transition-all"
-                style={{ width: `${incPct}%` }}
-              ></div>
-            </div>
+            <AnimatedProgressBar
+              value={incPct}
+              trackClassName="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden mt-2"
+              barClassName="bg-emerald-600 h-full rounded-full"
+            />
           </div>
         </div>
 
@@ -668,12 +668,11 @@ export const ApbdesManager: React.FC = () => {
             </div>
 
             {/* Progress bar */}
-            <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden mt-2">
-              <div
-                className="bg-amber-500 h-full rounded-full transition-all"
-                style={{ width: `${expPct}%` }}
-              ></div>
-            </div>
+            <AnimatedProgressBar
+              value={expPct}
+              trackClassName="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden mt-2"
+              barClassName="bg-amber-500 h-full rounded-full"
+            />
           </div>
         </div>
 

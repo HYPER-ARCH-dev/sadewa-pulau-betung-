@@ -42,6 +42,8 @@ import {
   Activity
 } from 'lucide-react';
 
+import { motion, AnimatePresence } from 'motion/react';
+import { AnimatedCounter } from '../common/AnimatedCounter';
 import { useResidents } from '../../hooks/useResidents';
 
 
@@ -195,7 +197,12 @@ export const AnalyticsDashboard: React.FC = () => {
   }, [activeResidents]);
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-500">
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+      className="w-full min-w-0 space-y-6"
+    >
       {/* Header & Controls */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
         <div>
@@ -253,7 +260,9 @@ export const AnalyticsDashboard: React.FC = () => {
         />
         <StatCard 
           title="Prevalensi Stunting" 
-          value={`${totalBalitaCount > 0 ? ((stuntingRiskCount / totalBalitaCount) * 100).toFixed(1) : '0'}%`} 
+          value={totalBalitaCount > 0 ? Number(((stuntingRiskCount / totalBalitaCount) * 100).toFixed(1)) : 0}
+          decimals={totalBalitaCount > 0 ? 1 : 0}
+          suffix="%"
           icon={<Baby className="w-5 h-5" />} 
           trend={stuntingRiskCount === 0 ? 'down' : 'up'}
           subtitle={`${stuntingRiskCount} Balita Berisiko dari ${totalBalitaCount} Terdata`}
@@ -277,7 +286,9 @@ export const AnalyticsDashboard: React.FC = () => {
         />
         <StatCard 
           title="Luas Lahan Terdata" 
-          value={`${analytics.summary.land.totalLandArea.toFixed(2)} Ha`} 
+          value={Number(analytics.summary.land.totalLandArea.toFixed(2))}
+          decimals={2}
+          suffix=" Ha"
           icon={<MapIcon className="w-5 h-5" />} 
           trend="up"
           subtitle="Total Bidang Tanah di WebGIS"
@@ -333,12 +344,14 @@ export const AnalyticsDashboard: React.FC = () => {
                     outerRadius={75}
                     paddingAngle={4}
                     dataKey="value"
+                    animationDuration={900}
+                    animationEasing="ease-out"
                   >
                     {stuntingPieData.map((entry, index) => (
                       <Cell key={`stunting-cell-${index}`} fill={entry.color} />
                     ))}
                   </Pie>
-                  <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '12px', color: '#fff' }} />
+                  <Tooltip contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.92)', backdropFilter: 'blur(8px)', borderColor: '#334155', borderRadius: '12px', color: '#fff' }} />
                 </PieChart>
               </ResponsiveContainer>
             </div>
@@ -370,7 +383,9 @@ export const AnalyticsDashboard: React.FC = () => {
                     <span>Sanitasi Layak (Jamban Sehat)</span>
                     <CheckCircle2 className="w-4 h-4" />
                   </div>
-                  <div className="text-xl font-black text-white">88.5%</div>
+                  <div className="text-xl font-black text-white">
+                    <AnimatedCounter value={88.5} decimals={1} suffix="%" />
+                  </div>
                   <p className="text-[10px] text-slate-400">Rumah tangga balita memiliki sarana buang air yang higienis.</p>
                 </div>
 
@@ -379,7 +394,9 @@ export const AnalyticsDashboard: React.FC = () => {
                     <span>Target Intervensi APBDes</span>
                     <AlertTriangle className="w-4 h-4" />
                   </div>
-                  <div className="text-xl font-black text-amber-300">{totalStuntedCount} Rumah Tangga</div>
+                  <div className="text-xl font-black text-amber-300">
+                    <AnimatedCounter value={totalStuntedCount} suffix=" Rumah Tangga" />
+                  </div>
                   <p className="text-[10px] text-slate-400">Memerlukan bantuan program Sanitasi & PMT Gizi terpadu.</p>
                 </div>
               </div>
@@ -406,48 +423,56 @@ export const AnalyticsDashboard: React.FC = () => {
                   </button>
                 </form>
 
-                {hasSearched && (
-                  <div className="mt-3 p-4 rounded-xl bg-slate-900 border border-teal-700/80 space-y-3 animate-in fade-in duration-300">
-                    {searchedToddler ? (
-                      <div>
-                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2">
-                          <div>
-                            <span className="text-[10px] uppercase font-extrabold text-emerald-400 tracking-wider">Hasil Integrasi NIK Sensus 360</span>
-                            <h5 className="text-sm font-black text-white">{searchedToddler.name} ({searchedToddler.kmsCardNumber})</h5>
+                <AnimatePresence>
+                  {hasSearched && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -6 }}
+                      transition={{ duration: 0.25 }}
+                      className="mt-3 p-4 rounded-xl bg-slate-900 border border-teal-700/80 space-y-3"
+                    >
+                      {searchedToddler ? (
+                        <div>
+                          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2">
+                            <div>
+                              <span className="text-[10px] uppercase font-extrabold text-emerald-400 tracking-wider">Hasil Integrasi NIK Sensus 360</span>
+                              <h5 className="text-sm font-black text-white">{searchedToddler.name} ({searchedToddler.kmsCardNumber})</h5>
+                            </div>
+                            <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase ${
+                              searchedToddler.measurements[searchedToddler.measurements.length - 1]?.stuntingCategory === 'Severely Stunted'
+                                ? 'bg-rose-950 text-rose-300 border border-rose-800'
+                                : searchedToddler.measurements[searchedToddler.measurements.length - 1]?.stuntingCategory === 'Stunted'
+                                ? 'bg-amber-950 text-amber-300 border border-amber-800'
+                                : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                            }`}>
+                              {searchedToddler.measurements[searchedToddler.measurements.length - 1]?.stuntingCategory || 'Normal'}
+                            </span>
                           </div>
-                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase ${
-                            searchedToddler.measurements[searchedToddler.measurements.length - 1]?.stuntingCategory === 'Severely Stunted'
-                              ? 'bg-rose-950 text-rose-300 border border-rose-800'
-                              : searchedToddler.measurements[searchedToddler.measurements.length - 1]?.stuntingCategory === 'Stunted'
-                              ? 'bg-amber-950 text-amber-300 border border-amber-800'
-                              : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
-                          }`}>
-                            {searchedToddler.measurements[searchedToddler.measurements.length - 1]?.stuntingCategory || 'Normal'}
-                          </span>
-                        </div>
 
-                        <div className="grid grid-cols-2 gap-2 text-[11px] pt-2 text-slate-300">
-                          <div>NIK Balita: <strong className="text-white">{searchedToddler.nik}</strong></div>
-                          <div>Orang Tua: <strong className="text-white">{searchedToddler.parentName}</strong></div>
-                          <div>Wilayah Sensus: <strong className="text-white">{searchedToddler.dusunName} ({searchedToddler.rtRw})</strong></div>
-                          <div>Usia Balita: <strong className="text-white">{calculateAgeInMonths(searchedToddler.birthDate, todayStr)} Bulan</strong></div>
-                        </div>
+                          <div className="grid grid-cols-2 gap-2 text-[11px] pt-2 text-slate-300">
+                            <div>NIK Balita: <strong className="text-white">{searchedToddler.nik}</strong></div>
+                            <div>Orang Tua: <strong className="text-white">{searchedToddler.parentName}</strong></div>
+                            <div>Wilayah Sensus: <strong className="text-white">{searchedToddler.dusunName} ({searchedToddler.rtRw})</strong></div>
+                            <div>Usia Balita: <strong className="text-white">{calculateAgeInMonths(searchedToddler.birthDate, todayStr)} Bulan</strong></div>
+                          </div>
 
-                        <div className="mt-3 p-2.5 rounded-lg bg-teal-950/60 border border-teal-800/80 text-[11px] text-teal-200 flex items-center gap-2">
-                          <TrendingUp className="w-4 h-4 text-emerald-400 shrink-0" />
-                          <span>
-                            <strong>Rekomendasi Intervensi APBDes:</strong> Terdaftar dalam program pemantauan rutin Posyandu. Prioritas sanitasi air bersih & PMT Gizi Desa.
-                          </span>
+                          <div className="mt-3 p-2.5 rounded-lg bg-teal-950/60 border border-teal-800/80 text-[11px] text-teal-200 flex items-center gap-2">
+                            <TrendingUp className="w-4 h-4 text-emerald-400 shrink-0" />
+                            <span>
+                              <strong>Rekomendasi Intervensi APBDes:</strong> Terdaftar dalam program pemantauan rutin Posyandu. Prioritas sanitasi air bersih & PMT Gizi Desa.
+                            </span>
+                          </div>
                         </div>
-                      </div>
-                    ) : (
-                      <div className="text-xs text-rose-400 flex items-center gap-2">
-                        <ShieldAlert className="w-4 h-4" />
-                        <span>Data Balita dengan NIK/Nama tersebut tidak ditemukan dalam database e-Posyandu aktif.</span>
-                      </div>
-                    )}
-                  </div>
-                )}
+                      ) : (
+                        <div className="text-xs text-rose-400 flex items-center gap-2">
+                          <ShieldAlert className="w-4 h-4" />
+                          <span>Data Balita dengan NIK/Nama tersebut tidak ditemukan dalam database e-Posyandu aktif.</span>
+                        </div>
+                      )}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
             </div>
           </div>
@@ -481,12 +506,12 @@ export const AnalyticsDashboard: React.FC = () => {
                   tick={{ fill: '#94a3b8', fontSize: 12 }}
                 />
                 <Tooltip 
-                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                  contentStyle={{ borderRadius: '14px', border: '1px solid rgba(226, 232, 240, 0.8)', backgroundColor: 'rgba(255, 255, 255, 0.92)', backdropFilter: 'blur(8px)', boxShadow: '0 10px 25px -5px rgb(0 0 0 / 0.1)' }}
                 />
                 <Legend />
-                <Line type="monotone" dataKey="births" name="Kelahiran" stroke="#10b981" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 6 }} />
-                <Line type="monotone" dataKey="deaths" name="Kematian" stroke="#ef4444" strokeWidth={2} strokeDasharray="5 5" />
-                <Line type="monotone" dataKey="businessNew" name="Usaha Baru" stroke="#f59e0b" strokeWidth={3} />
+                <Line type="monotone" dataKey="births" name="Kelahiran" stroke="#10b981" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 6 }} animationDuration={900} animationEasing="ease-out" />
+                <Line type="monotone" dataKey="deaths" name="Kematian" stroke="#ef4444" strokeWidth={2} strokeDasharray="5 5" animationDuration={900} animationEasing="ease-out" />
+                <Line type="monotone" dataKey="businessNew" name="Usaha Baru" stroke="#f59e0b" strokeWidth={3} animationDuration={900} animationEasing="ease-out" />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -510,12 +535,14 @@ export const AnalyticsDashboard: React.FC = () => {
                     outerRadius={80}
                     paddingAngle={5}
                     dataKey="value"
+                    animationDuration={900}
+                    animationEasing="ease-out"
                   >
                     {demographyData.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={entry.color} />
                     ))}
                   </Pie>
-                  <Tooltip />
+                  <Tooltip contentStyle={{ borderRadius: '14px', border: '1px solid rgba(226, 232, 240, 0.8)', backgroundColor: 'rgba(255, 255, 255, 0.92)', backdropFilter: 'blur(8px)' }} />
                 </PieChart>
               </ResponsiveContainer>
             </div>
@@ -554,8 +581,8 @@ export const AnalyticsDashboard: React.FC = () => {
                   tickLine={false} 
                   tick={{ fill: '#94a3b8', fontSize: 12 }}
                 />
-                <Tooltip cursor={{fill: '#f8fafc'}} />
-                <Bar dataKey="requestCount" name="Total Layanan" fill="#3b82f6" radius={[6, 6, 0, 0]} barSize={40} />
+                <Tooltip cursor={{fill: '#f8fafc'}} contentStyle={{ borderRadius: '14px', border: '1px solid rgba(226, 232, 240, 0.8)', backgroundColor: 'rgba(255, 255, 255, 0.92)', backdropFilter: 'blur(8px)' }} />
+                <Bar dataKey="requestCount" name="Total Layanan" fill="#3b82f6" radius={[6, 6, 0, 0]} barSize={40} animationDuration={900} animationEasing="ease-out" />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -578,8 +605,8 @@ export const AnalyticsDashboard: React.FC = () => {
                 <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
                 <XAxis type="number" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11 }} />
                 <YAxis type="category" dataKey="name" axisLine={false} tickLine={false} width={130} tick={{ fill: '#475569', fontSize: 10, fontWeight: 'bold' }} />
-                <Tooltip contentStyle={{ borderRadius: '12px', border: '1px solid #e2e8f0' }} />
-                <Bar dataKey="value" name="Jumlah Warga" fill="#059669" radius={[0, 6, 6, 0]} barSize={20} />
+                <Tooltip contentStyle={{ borderRadius: '14px', border: '1px solid rgba(226, 232, 240, 0.8)', backgroundColor: 'rgba(255, 255, 255, 0.92)', backdropFilter: 'blur(8px)' }} />
+                <Bar dataKey="value" name="Jumlah Warga" fill="#059669" radius={[0, 6, 6, 0]} barSize={20} animationDuration={900} animationEasing="ease-out" />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -602,8 +629,8 @@ export const AnalyticsDashboard: React.FC = () => {
                 <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
                 <XAxis type="number" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11 }} />
                 <YAxis type="category" dataKey="level" axisLine={false} tickLine={false} width={130} tick={{ fill: '#475569', fontSize: 10, fontWeight: 'bold' }} />
-                <Tooltip contentStyle={{ borderRadius: '12px', border: '1px solid #e2e8f0' }} />
-                <Bar dataKey="total" name="Jumlah Jiwa" fill="#2563eb" radius={[0, 6, 6, 0]} barSize={20} />
+                <Tooltip contentStyle={{ borderRadius: '14px', border: '1px solid rgba(226, 232, 240, 0.8)', backgroundColor: 'rgba(255, 255, 255, 0.92)', backdropFilter: 'blur(8px)' }} />
+                <Bar dataKey="total" name="Jumlah Jiwa" fill="#2563eb" radius={[0, 6, 6, 0]} barSize={20} animationDuration={900} animationEasing="ease-out" />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -611,20 +638,22 @@ export const AnalyticsDashboard: React.FC = () => {
       </div>
 
 
-    </div>
+    </motion.div>
   );
 };
 
 interface StatCardProps {
   title: string;
   value: string | number;
+  decimals?: number;
+  suffix?: string;
   icon: React.ReactNode;
   trend: 'up' | 'down' | 'neutral';
   subtitle: string;
   color: 'emerald' | 'rose' | 'amber' | 'blue';
 }
 
-const StatCard: React.FC<StatCardProps> = ({ title, value, icon, trend, subtitle, color }) => {
+const StatCard: React.FC<StatCardProps> = ({ title, value, decimals = 0, suffix = '', icon, trend, subtitle, color }) => {
   const colorMap = {
     emerald: 'bg-emerald-50 text-emerald-600 border-emerald-100',
     rose: 'bg-rose-50 text-rose-600 border-rose-100',
@@ -633,9 +662,9 @@ const StatCard: React.FC<StatCardProps> = ({ title, value, icon, trend, subtitle
   };
 
   return (
-    <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm transform transition-all hover:scale-[1.02] duration-300">
+    <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-md group">
       <div className="flex items-center justify-between mb-4">
-        <div className={`p-2.5 rounded-xl ${colorMap[color]} border`}>
+        <div className={`p-2.5 rounded-xl ${colorMap[color]} border transition-transform duration-200 group-hover:scale-110`}>
           {icon}
         </div>
         {trend !== 'neutral' && (
@@ -647,7 +676,13 @@ const StatCard: React.FC<StatCardProps> = ({ title, value, icon, trend, subtitle
       </div>
       <div className="space-y-1">
         <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">{title}</h4>
-        <div className="text-2xl font-black text-slate-900">{value}</div>
+        <div className="text-2xl font-black text-slate-900">
+          {typeof value === 'number' ? (
+            <AnimatedCounter value={value} decimals={decimals} suffix={suffix} />
+          ) : (
+            value
+          )}
+        </div>
         <p className="text-[10px] font-medium text-slate-500 leading-tight">{subtitle}</p>
       </div>
     </div>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, MotionConfig } from 'motion/react';
 import { AppProvider, useApp as useAppContext } from './context/AppContext';
 import { Header } from './components/common/Header';
 import { Footer } from './components/common/Footer';
@@ -10,6 +10,8 @@ import { VillageAiAssistant } from './components/common/VillageAiAssistant';
 import { DocumentVerificationModal as DocumentValidationModal } from './components/common/DocumentVerificationModal';
 import { StickyShortcutBar } from './components/common/StickyShortcutBar';
 import { SadewaHouseLogo, SadewaFullLogo } from './components/common/SadewaHouseLogo';
+import { ScrollProgressIndicator } from './components/common/ScrollProgressIndicator';
+import { AnimatedLoadingBar } from './components/common/AnimatedProgressBar';
 import { ShieldCheck, Lock, Loader2, RefreshCw } from 'lucide-react';
 
 // Enhanced retry helper with exponential backoff for dynamic imports
@@ -82,28 +84,66 @@ const PageSkeleton = () => {
   const logoUrl = villageProfile?.sadewaLogoUrl?.trim() || villageProfile?.sadewaIconUrl?.trim();
 
   return (
-    <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
-      <div className="flex flex-col items-center justify-center min-h-[45vh] space-y-6 text-center">
+    <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6" aria-busy="true">
+      <AnimatedLoadingBar label="Sinkronisasi Modul SADEWA..." />
+
+      {/* Header Skeleton */}
+      <div className="bg-white/90 dark:bg-slate-900/90 backdrop-blur-sm rounded-3xl border border-slate-200/80 dark:border-slate-800 p-6 flex items-center justify-between gap-4 shadow-sm">
+        <div className="space-y-2.5 flex-1">
+          <div className="skeleton-shimmer h-3 w-32 rounded-full bg-emerald-100/80 dark:bg-emerald-950/60" />
+          <div className="skeleton-shimmer h-6 w-64 max-w-full rounded-lg bg-slate-200/80 dark:bg-slate-800" />
+          <div className="skeleton-shimmer h-3.5 w-96 max-w-full rounded-md bg-slate-200/70 dark:bg-slate-800/70" />
+        </div>
         {logoUrl ? (
-          <motion.img 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            src={logoUrl} 
-            alt="Logo" 
-            className="h-16 w-auto object-contain opacity-40 grayscale"
+          <img
+            src={logoUrl}
+            alt="Logo"
+            className="h-11 w-auto object-contain opacity-35 grayscale hidden sm:block"
             referrerPolicy="no-referrer"
           />
         ) : (
-          <div className="w-14 h-14 rounded-2xl bg-emerald-100/80 dark:bg-emerald-950/50 flex items-center justify-center ring-1 ring-emerald-500/20">
-            <Loader2 className="w-7 h-7 text-emerald-700 dark:text-emerald-400 animate-spin" />
+          <div className="w-11 h-11 rounded-2xl bg-emerald-50 dark:bg-emerald-950/50 hidden sm:flex items-center justify-center ring-1 ring-emerald-500/20">
+            <Loader2 className="w-5 h-5 text-emerald-700 dark:text-emerald-400 animate-spin" />
           </div>
         )}
-        <div className="space-y-1">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] animate-pulse">
-            Sinkronisasi Data...
-          </p>
+      </div>
+
+      {/* KPI Cards Skeleton */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {Array.from({ length: 4 }).map((_, idx) => (
+          <div
+            key={idx}
+            className="bg-white/90 dark:bg-slate-900/90 rounded-2xl border border-slate-200/80 dark:border-slate-800 p-5 space-y-3 shadow-sm"
+          >
+            <div className="flex items-center justify-between">
+              <div className="skeleton-shimmer h-3 w-24 rounded-md bg-slate-200/80 dark:bg-slate-800" />
+              <div className="skeleton-shimmer w-9 h-9 rounded-xl bg-slate-200/80 dark:bg-slate-800" />
+            </div>
+            <div className="skeleton-shimmer h-7 w-28 rounded-lg bg-slate-200/90 dark:bg-slate-800" />
+            <div className="skeleton-shimmer h-3 w-36 rounded-md bg-slate-100 dark:bg-slate-800/70" />
+          </div>
+        ))}
+      </div>
+
+      {/* Content Blocks Skeleton */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white/90 dark:bg-slate-900/90 rounded-3xl border border-slate-200/80 dark:border-slate-800 p-6 space-y-4 shadow-sm">
+          <div className="skeleton-shimmer h-5 w-48 rounded-lg bg-slate-200/80 dark:bg-slate-800" />
+          <div className="skeleton-shimmer h-52 w-full rounded-2xl bg-slate-100 dark:bg-slate-800/70" />
+        </div>
+        <div className="bg-white/90 dark:bg-slate-900/90 rounded-3xl border border-slate-200/80 dark:border-slate-800 p-6 space-y-4 shadow-sm">
+          <div className="skeleton-shimmer h-5 w-44 rounded-lg bg-slate-200/80 dark:bg-slate-800" />
+          <div className="space-y-3">
+            <div className="skeleton-shimmer h-14 w-full rounded-2xl bg-slate-100 dark:bg-slate-800/70" />
+            <div className="skeleton-shimmer h-14 w-full rounded-2xl bg-slate-100 dark:bg-slate-800/70" />
+            <div className="skeleton-shimmer h-14 w-full rounded-2xl bg-slate-100 dark:bg-slate-800/70" />
+          </div>
         </div>
       </div>
+
+      <p className="text-center text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">
+        Sinkronisasi Modul SADEWA...
+      </p>
     </div>
   );
 };
@@ -435,6 +475,7 @@ const MainContent: React.FC = () => {
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50/50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 selection:bg-emerald-200 selection:text-emerald-950">
+      <ScrollProgressIndicator />
       <AnimatePresence>
         {isLoading && (
           <motion.div 
@@ -464,8 +505,8 @@ const MainContent: React.FC = () => {
               )}
 
               <div className="mt-20 flex flex-col items-center">
-                <Loader2 className="w-5 h-5 text-slate-200 animate-spin mb-2" />
-                <span className="text-[10px] font-bold text-slate-300 uppercase tracking-[0.4em]">Memuat Data...</span>
+                <AnimatedLoadingBar className="w-48 mb-3" />
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.4em]">Memuat Data...</span>
               </div>
             </motion.div>
           </motion.div>
@@ -483,17 +524,17 @@ const MainContent: React.FC = () => {
       )}
 
       {/* Area Konten Utama Aplikasi: Menghilangkan pt-10 berlebih dan double padding agar mobile dan desktop presisi */}
-      <main className="flex-1 w-full pt-0">
+      <main className="flex-1 w-full min-w-0 pt-0">
         <ModuleErrorBoundary>
           <AnimatePresence mode="wait">
             <motion.div
               key={currentView}
-              className="w-full"
-              initial={{ opacity: 0, x: 20, y: 4 }}
-              animate={{ opacity: 1, x: 0, y: 0 }}
-              exit={{ opacity: 0, x: -20, y: -4 }}
+              className="w-full min-w-0"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
               transition={{ 
-                duration: 0.35, 
+                duration: 0.26, 
                 ease: [0.22, 1, 0.36, 1]
               }}
             >
@@ -551,23 +592,27 @@ function isPlatformPortalRoute(): boolean {
 export default function App() {
   if (isPlatformPortalRoute()) {
     return (
-      <ModuleErrorBoundary>
-        <Suspense
-          fallback={
-            <div className="min-h-screen bg-slate-950 text-slate-300 flex items-center justify-center text-xs font-mono">
-              Memuat SADEWA Control Plane...
-            </div>
-          }
-        >
-          <PlatformPortal />
-        </Suspense>
-      </ModuleErrorBoundary>
+      <MotionConfig reducedMotion="user">
+        <ModuleErrorBoundary>
+          <Suspense
+            fallback={
+              <div className="min-h-screen bg-slate-950 text-slate-300 flex items-center justify-center text-xs font-mono">
+                Memuat SADEWA Control Plane...
+              </div>
+            }
+          >
+            <PlatformPortal />
+          </Suspense>
+        </ModuleErrorBoundary>
+      </MotionConfig>
     );
   }
 
   return (
-    <AppProvider>
-      <MainContent />
-    </AppProvider>
+    <MotionConfig reducedMotion="user">
+      <AppProvider>
+        <MainContent />
+      </AppProvider>
+    </MotionConfig>
   );
 }

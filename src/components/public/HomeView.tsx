@@ -39,9 +39,12 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { SadewaHouseLogo, SadewaFullLogo } from '../common/SadewaHouseLogo';
 import { PriorityBadge, ProjectStatusBadge } from '../common/StatusBadge';
+import { AnimatedProgressBar } from '../common/AnimatedProgressBar';
 import { useResidents } from '../../hooks/useResidents';
 import { HomeApbdesSection } from '../transparency/HomeApbdesSection';
 import { DashboardStats } from './DashboardStats';
+import { OfficialsSpotlightCard } from './OfficialsSpotlightCard';
+import defaultHeroImgAsset from '../../assets/images/modern_village_portal_hero_1790274565982.jpg';
 
 export const HomeView: React.FC = () => {
   const { residents } = useResidents();
@@ -58,6 +61,7 @@ export const HomeView: React.FC = () => {
     villageProfile,
     officials,
     apbdesData,
+    demographics,
     findRequestByCode,
     likeNewsArticle,
     likeDevelopmentProject,
@@ -65,6 +69,7 @@ export const HomeView: React.FC = () => {
   } = useApp();
 
   const [quickTrackingCode, setQuickTrackingCode] = useState('');
+  const [quickBansosQuery, setQuickBansosQuery] = useState('');
   const [trackingResult, setTrackingResult] = useState<any | null>(null);
   const [searched, setSearched] = useState(false);
 
@@ -73,7 +78,7 @@ export const HomeView: React.FC = () => {
   const [isPaused, setIsPaused] = useState(false);
 
   // High quality default fallback images & slide content generator
-  const defaultHeroImg = villageProfile.heroBackgroundUrl || '/src/assets/images/modern_village_portal_hero_1790274565982.jpg';
+  const defaultHeroImg = villageProfile.heroBackgroundUrl?.trim() || defaultHeroImgAsset;
   const latestNewsItem = news && news.length > 0 ? news[0] : null;
   const latestProject = developmentProjects && developmentProjects.length > 0 ? developmentProjects[0] : null;
   const latestPotential = potentials && potentials.length > 0 ? potentials[0] : null;
@@ -181,22 +186,35 @@ export const HomeView: React.FC = () => {
   const currentSlide = heroSlides[activeSlide] || heroSlides[0];
 
   // Sinkronisasi Demografi Beranda:
-  // Jika database kependudukan sudah terisi penuh (>50 jiwa), hitung langsung dari master data.
-  // Jika masih tahap inisialisasi sample, tampilkan data demografi makro resmi desa (1.842 Jiwa / 524 KK) secara proporsional.
+  // 1. Jika login Admin/Operator & master resident sudah dimuat (>0 jiwa), pakai data admin langsung.
+  // 2. Untuk pengunjung publik, pakai hasil agregat server aman (/api/public/bootstrap & /api/public/demographics) jika tabel warga berisi.
+  // 3. Jika tabel warga di database masih kosong (0 baris), fallback ke data makro Profil Desa.
   const aliveResidents = useMemo(() => residents.filter(r => (r.status || '').toUpperCase() === 'HIDUP'), [residents]);
-  const hasFullMasterData = aliveResidents.length >= 50;
+  const hasAdminMasterData = aliveResidents.length > 0;
+  const hasPublicMasterData = !hasAdminMasterData && Boolean(demographics?.hasMasterData && demographics.totalPopulation > 0);
 
-  const realTotal = hasFullMasterData ? aliveResidents.length : (villageProfile.totalPopulation || 1842);
-  const realFamilies = hasFullMasterData 
-    ? new Set(aliveResidents.map(r => r.kk).filter(Boolean)).size 
+  const realTotal = hasAdminMasterData
+    ? aliveResidents.length
+    : hasPublicMasterData
+    ? demographics!.totalPopulation
+    : (villageProfile.totalPopulation || 1842);
+
+  const realFamilies = hasAdminMasterData
+    ? new Set(aliveResidents.map(r => r.kk).filter(Boolean)).size
+    : hasPublicMasterData
+    ? demographics!.totalFamilies
     : (villageProfile.totalFamilies || 524);
 
-  const realMale = hasFullMasterData 
-    ? aliveResidents.filter(r => r.gender === 'Laki-laki').length 
+  const realMale = hasAdminMasterData
+    ? aliveResidents.filter(r => r.gender === 'Laki-laki').length
+    : hasPublicMasterData
+    ? demographics!.maleCount
     : Math.round(realTotal * 0.512);
 
-  const realFemale = hasFullMasterData 
-    ? aliveResidents.filter(r => r.gender === 'Perempuan').length 
+  const realFemale = hasAdminMasterData
+    ? aliveResidents.filter(r => r.gender === 'Perempuan').length
+    : hasPublicMasterData
+    ? demographics!.femaleCount
     : (realTotal - realMale);
 
   const calculateAge = (birthDate: string) => {
@@ -213,7 +231,7 @@ export const HomeView: React.FC = () => {
   };
 
   const realAgeData = useMemo(() => {
-    if (hasFullMasterData) {
+    if (hasAdminMasterData) {
       const groups = [
         { name: '0-5', min: 0, max: 5, value: 0 },
         { name: '6-12', min: 6, max: 12, value: 0 },
@@ -236,10 +254,14 @@ export const HomeView: React.FC = () => {
         }
       });
 
-      return groups.map(({ name, value }) => ({ name, value }));
+      return groups.filter(g => g.name !== 'Tidak Diketahui' || g.value > 0).map(({ name, value }) => ({ name, value }));
     }
 
-    // Proporsi piramida penduduk standar BPS untuk desa 1.842 jiwa
+    if (hasPublicMasterData && demographics?.homeAgeData && demographics.homeAgeData.length > 0) {
+      return demographics.homeAgeData;
+    }
+
+    // Proporsi piramida penduduk standar BPS hanya saat tabel warga kosong
     const ageDist = [
       { name: '0-5', ratio: 0.082 },   // Balita
       { name: '6-12', ratio: 0.128 },  // Anak Usia SD
@@ -261,22 +283,12 @@ export const HomeView: React.FC = () => {
     });
 
     return result;
-  }, [hasFullMasterData, aliveResidents, realTotal]);
+  }, [hasAdminMasterData, hasPublicMasterData, aliveResidents, demographics, realTotal]);
 
   // Budget Realization Metrics
   const totalIncome = apbdesData?.totalIncome || 1420000000;
   const totalIncomeRealized = apbdesData?.totalIncomeRealized ?? Math.round(totalIncome * 0.684);
   const realizationPercent = totalIncome > 0 ? ((totalIncomeRealized / totalIncome) * 100).toFixed(1) : '68.4';
-
-  // Active Kepala Desa for greeting
-  const kadesOfficial = officials.find(
-    (o) => (o.section === 'kepala_desa' || o.position.toLowerCase().includes('kepala desa')) && o.isActive !== false
-  );
-  const kadesName = villageProfile.kadesName || kadesOfficial?.name || 'Kepala Desa';
-  const kadesNip = villageProfile.kadesNip || kadesOfficial?.nip || '';
-  const kadesPhoto = villageProfile.kadesPhotoUrl || kadesOfficial?.imageUrl || '';
-  const kadesGreetingTitle = villageProfile.kadesGreetingTitle || `Membangun ${villageProfile.villageName || 'Desa'} dengan Kebersamaan dan Pelayanan Digital`;
-  const kadesGreeting = villageProfile.kadesGreeting || `Assalamu’alaikum Warahmatullahi Wabarakatuh. Selamat datang di portal resmi Pemerintah ${villageProfile.villageName || 'Desa'}, ${villageProfile.district || 'Kecamatan'}. Kehadiran portal ini merupakan ikhtiar nyata kami menghadirkan tata kelola desa yang transparan, bersih dari pungli, serta memudahkan warga mengurus surat-menyurat secara online dari mana saja.`;
 
   // Filter urgent announcements
   const urgentAnnouncement = announcements.find((a) => a.isActive && (a.priority === 'mendesak' || a.priority === 'penting'));
@@ -330,11 +342,19 @@ export const HomeView: React.FC = () => {
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.98 }}
               transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}
-              className="absolute inset-0 z-0 bg-cover bg-center"
-              style={{
-                backgroundImage: `url(${currentSlide.bgUrl})`,
-              }}
-            />
+              className="absolute inset-0 z-0 bg-slate-950"
+            >
+              <img
+                src={currentSlide.bgUrl || defaultHeroImgAsset}
+                alt={currentSlide.title}
+                onError={(e) => {
+                  if (e.currentTarget.src !== defaultHeroImgAsset) {
+                    e.currentTarget.src = defaultHeroImgAsset;
+                  }
+                }}
+                className="w-full h-full object-cover object-center"
+              />
+            </motion.div>
           </AnimatePresence>
           
           {/* Soft Gradient Overlay - Keeps Banner Image Bright & Crisp */}
@@ -695,7 +715,7 @@ export const HomeView: React.FC = () => {
               <form 
                 onSubmit={(e) => {
                   e.preventDefault();
-                  navigateTo('bansos');
+                  navigateTo('bansos', { bansosQuery: quickBansosQuery.trim() });
                 }} 
                 className="bg-slate-950/80 border border-emerald-500/40 rounded-2xl p-4 space-y-3 backdrop-blur-md shadow-2xl"
               >
@@ -707,6 +727,8 @@ export const HomeView: React.FC = () => {
                   <Search className="w-4 h-4 absolute left-3.5 top-3 text-slate-400" />
                   <input 
                     type="text"
+                    value={quickBansosQuery}
+                    onChange={(e) => setQuickBansosQuery(e.target.value)}
                     placeholder="Ketik NIK atau Nomor KK..."
                     className="w-full bg-slate-900/90 rounded-xl border border-slate-700/80 focus:border-emerald-400 pl-9 pr-3 py-2 text-xs text-white placeholder:text-slate-500 font-mono focus:outline-none transition-colors"
                   />
@@ -783,9 +805,11 @@ export const HomeView: React.FC = () => {
               </p>
             </div>
             <div className="relative z-10 mt-6">
-               <div className="h-1.5 w-full bg-indigo-100 dark:bg-indigo-900/40 rounded-full overflow-hidden">
-                 <div className="h-full w-2/3 bg-indigo-500 rounded-full animate-pulse"></div>
-               </div>
+               <AnimatedProgressBar
+                 value={67}
+                 trackClassName="h-1.5 w-full bg-indigo-100 dark:bg-indigo-900/40 rounded-full overflow-hidden"
+                 barClassName="h-full bg-indigo-500 rounded-full"
+               />
                <div className="flex justify-between items-center mt-2 text-[10px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest">
                  <span>Respons Penanganan Cepat</span>
                  <span className="flex items-center gap-1">Kirim Laporan <ArrowRight className="w-3 h-3" /></span>
@@ -835,59 +859,16 @@ export const HomeView: React.FC = () => {
         transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
         className="grid grid-cols-1 lg:grid-cols-12 gap-8 pt-8"
       >
-        {/* Sambutan Resmi Kepala Desa (Featured Side Card) */}
-        <div className="lg:col-span-5 bg-white dark:bg-slate-900 rounded-[2.5rem] border border-slate-200/60 dark:border-slate-800/60 p-8 shadow-sm relative overflow-hidden group">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 rounded-bl-[5rem] -mr-8 -mt-8 group-hover:scale-110 transition-transform duration-700"></div>
-          
-          <div className="space-y-6">
-            <div className="flex flex-col items-center text-center space-y-4">
-              <div className="relative">
-                <div className="w-32 h-32 sm:w-40 sm:h-40 rounded-3xl overflow-hidden border-4 border-white dark:border-slate-800 shadow-2xl bg-slate-100 group-hover:rotate-2 transition-transform duration-500">
-                  {kadesPhoto && kadesPhoto.trim() !== '' ? (
-                    <img
-                      src={kadesPhoto.trim()}
-                      alt={kadesName}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <div className="flex flex-col items-center justify-center text-slate-300 h-full">
-                      <User className="w-16 h-16" />
-                    </div>
-                  )}
-                </div>
-                <div className="absolute -bottom-2 -right-2 bg-emerald-600 text-white p-2 rounded-xl shadow-lg">
-                  <BadgeCheck className="w-5 h-5" />
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <h3 className="text-xl font-black text-slate-900 dark:text-white tracking-tight leading-none uppercase">{kadesName}</h3>
-                <p className="text-[10px] font-black text-emerald-600 dark:text-emerald-400 uppercase tracking-[0.2em]">Kepala Desa Pulau Betung</p>
-                {kadesNip && <p className="text-[10px] text-slate-400 font-medium italic">NIP/NIAP: {kadesNip}</p>}
-              </div>
-            </div>
-
-            <div className="relative">
-              <span className="absolute -top-4 -left-2 text-6xl text-emerald-500/10 font-serif leading-none">“</span>
-              <p className="text-sm sm:text-base text-slate-600 dark:text-slate-400 leading-relaxed italic relative z-10 text-center px-4">
-                {kadesGreeting}
-              </p>
-              <span className="absolute -bottom-8 -right-2 text-6xl text-emerald-500/10 font-serif leading-none">”</span>
-            </div>
-
-            <div className="pt-6 border-t border-slate-100 dark:border-slate-800 flex justify-center">
-              <button
-                onClick={() => navigateTo('profil')}
-                className="px-6 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 hover:bg-emerald-600 hover:text-white text-slate-900 dark:text-slate-200 font-black text-[10px] uppercase tracking-widest transition-all cursor-pointer"
-              >
-                Visi & Misi Selengkapnya
-              </button>
-            </div>
-          </div>
-        </div>
+        {/* Perangkat Desa & Sambutan Interaktif (Auto-Slide & Cursor Spotlight) */}
+        <OfficialsSpotlightCard
+          officials={officials}
+          villageProfile={villageProfile}
+          onNavigateProfile={() => navigateTo('profil')}
+          onNavigateGovernment={() => navigateTo('pemerintahan')}
+        />
 
         {/* APBDes Transparansi (Main Center Card) */}
-        <div className="lg:col-span-7 space-y-6">
+        <div className="lg:col-span-7 w-full min-w-0 space-y-6">
            <HomeApbdesSection />
         </div>
       </motion.section>
@@ -938,8 +919,13 @@ export const HomeView: React.FC = () => {
               >
                 <div className="h-56 relative overflow-hidden">
                    <img
-                    src={item.coverImage?.trim() ? item.coverImage : 'https://images.unsplash.com/photo-1577495508048-b635879837f1?w=800&auto=format&fit=crop&q=80'}
+                    src={item.coverImage?.trim() ? item.coverImage : defaultHeroImgAsset}
                     alt={item.title}
+                    onError={(e) => {
+                      if (e.currentTarget.src !== defaultHeroImgAsset) {
+                        e.currentTarget.src = defaultHeroImgAsset;
+                      }
+                    }}
                     className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 to-transparent opacity-60 group-hover:opacity-100 transition-opacity" />
@@ -991,9 +977,11 @@ export const HomeView: React.FC = () => {
                 {developmentProjects.slice(0, 1).map(p => (
                   <div key={p.id} className="space-y-3">
                     <p className="text-xs text-slate-400 font-medium line-clamp-2">{p.title}</p>
-                    <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
-                      <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${p.progressPercent}%` }}></div>
-                    </div>
+                    <AnimatedProgressBar
+                      value={p.progressPercent}
+                      trackClassName="h-1.5 w-full bg-white/10 rounded-full overflow-hidden"
+                      barClassName="h-full bg-emerald-500 rounded-full"
+                    />
                     <div className="flex justify-between text-[10px] font-black uppercase tracking-widest text-emerald-500">
                       <span>{p.progressPercent}% Selesai</span>
                       <button onClick={() => navigateTo('pembangunan')} className="hover:underline cursor-pointer">Rincian Proyek →</button>
@@ -1098,8 +1086,13 @@ export const HomeView: React.FC = () => {
             >
               <div className="h-48 relative overflow-hidden">
                 <img
-                  src={pot.imageUrl?.trim() || 'https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?w=800&auto=format&fit=crop&q=80'}
+                  src={pot.imageUrl?.trim() || defaultHeroImgAsset}
                   alt={pot.name}
+                  onError={(e) => {
+                    if (e.currentTarget.src !== defaultHeroImgAsset) {
+                      e.currentTarget.src = defaultHeroImgAsset;
+                    }
+                  }}
                   className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-slate-950/60 to-transparent" />

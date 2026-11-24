@@ -311,7 +311,7 @@ export const PosyanduManager: React.FC = () => {
   };
 
   return (
-    <div className="space-y-8">
+    <div className="w-full min-w-0 space-y-8">
       {/* Header Dashboard Admin */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-6">
         <div>

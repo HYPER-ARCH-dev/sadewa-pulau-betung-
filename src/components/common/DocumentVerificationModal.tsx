@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { ShieldCheck, ShieldAlert, AlertTriangle, CheckCircle2, XCircle, X, Calendar, User, FileText, Building2, Clock, RefreshCw } from 'lucide-react';
 import { api } from '../../services/api';
 import { useApp } from '../../context/AppContext';
@@ -91,18 +92,31 @@ export const DocumentVerificationModal: React.FC<DocumentVerificationModalProps>
     fetchVerification();
   }, [isOpen, trackingCode, letterNumber]);
 
-  if (!isOpen) return null;
-
   const isCancelled = result?.validityState === 'CANCELLED' || (result?.status && (result.status.includes('DITOLAK') || result.status.includes('BATAL')));
   const isPending = result?.validityState === 'PENDING' || (result?.status && (result.status.includes('DIAJUKAN') || result.status.includes('DIPROSES')));
   const isVerified = (result?.validityState === 'VALID' || (!!result?.verified && !isCancelled && !isPending)) && !!result?.certificate;
   const isSystemError = !!result?.isSystemError;
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto p-4 flex items-center justify-center">
-      <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs transition-opacity" onClick={onClose} />
+    <AnimatePresence>
+      {isOpen && (
+        <div className="fixed inset-0 z-50 overflow-y-auto p-4 flex items-center justify-center">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm"
+            onClick={onClose}
+          />
 
-      <div className="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden z-10 animate-in fade-in zoom-in-95 duration-150">
+          <motion.div
+            initial={{ opacity: 0, y: 12, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.96 }}
+            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+            className="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden z-10"
+          >
         {/* Header */}
         <div
           className={`p-6 text-white relative ${
@@ -325,13 +339,15 @@ export const DocumentVerificationModal: React.FC<DocumentVerificationModalProps>
           <div className="pt-2">
             <button
               onClick={onClose}
-              className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs rounded-xl shadow-xs transition-colors"
+              className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 active:scale-[0.99] text-white font-semibold text-xs rounded-xl shadow-xs transition-all cursor-pointer"
             >
               Tutup Jendela Verifikasi
             </button>
           </div>
         </div>
-      </div>
+      </motion.div>
     </div>
+      )}
+    </AnimatePresence>
   );
 };

@@ -34,6 +34,7 @@ import {
 } from 'recharts';
 import { motion } from 'motion/react';
 import { VillageDemographicCharts } from '../transparency/VillageDemographicCharts';
+import { AnimatedProgressBar } from '../common/AnimatedProgressBar';
 
 export const TransparencyView: React.FC = () => {
   const { budget, budgetHistory, villageProfile, territories, addToast } = useApp();
@@ -129,7 +130,7 @@ export const TransparencyView: React.FC = () => {
                   initial={{ width: 0 }}
                   animate={{ width: `${incPct}%` }}
                   transition={{ duration: 1, ease: "easeOut" }}
-                  className="h-full bg-gradient-to-r from-blue-600 to-cyan-400 rounded-full"
+                  className="relative overflow-hidden sadewa-progress-sheen h-full bg-gradient-to-r from-blue-600 to-cyan-400 rounded-full"
                 />
               </div>
               <div className="flex items-center justify-between text-[10px] font-black text-blue-300 tracking-wider">
@@ -141,7 +142,7 @@ export const TransparencyView: React.FC = () => {
                   initial={{ width: 0 }}
                   animate={{ width: `${expPct}%` }}
                   transition={{ duration: 1, ease: "easeOut" }}
-                  className="h-full bg-gradient-to-r from-indigo-600 to-blue-400 rounded-full"
+                  className="relative overflow-hidden sadewa-progress-sheen h-full bg-gradient-to-r from-indigo-600 to-blue-400 rounded-full"
                 />
               </div>
             </div>
@@ -156,8 +157,12 @@ export const TransparencyView: React.FC = () => {
           <span className="text-xs font-black uppercase tracking-widest text-cyan-200">
             Pilih Tahun Anggaran & Dokumen:
           </span>
-          <div className="flex items-center space-x-2">
-            {[2026, 2025].map((yr) => (
+          <div className="flex items-center space-x-2 flex-wrap gap-y-2">
+            {Array.from(
+              new Set([2026, 2025, ...(budgetHistory || []).map((b) => b.year)])
+            )
+              .sort((a, b) => b - a)
+              .map((yr) => (
               <button
                 key={yr}
                 onClick={() => setSelectedYear(yr)}
@@ -418,9 +423,12 @@ export const TransparencyView: React.FC = () => {
                     <span>Realisasi: Rp {itemReal.toLocaleString('id-ID')}</span>
                     <span className="font-bold text-emerald-700">{pct.toFixed(1)}%</span>
                   </div>
-                  <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden mt-1">
-                    <div className="h-full bg-emerald-600 rounded-full" style={{ width: `${pct}%` }} />
-                  </div>
+                  <AnimatedProgressBar
+                    value={pct}
+                    delay={idx * 0.05}
+                    trackClassName="w-full h-2 bg-slate-200 rounded-full overflow-hidden mt-1"
+                    barClassName="h-full bg-emerald-600 rounded-full"
+                  />
                   <div className="text-[10px] text-slate-400 mt-1">{item.description}</div>
                 </div>
               );
@@ -457,9 +465,12 @@ export const TransparencyView: React.FC = () => {
                     <span>Realisasi: Rp {itemReal.toLocaleString('id-ID')}</span>
                     <span className="font-bold text-amber-800">{pct.toFixed(1)}%</span>
                   </div>
-                  <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden mt-1">
-                    <div className="h-full bg-amber-500 rounded-full" style={{ width: `${pct}%` }} />
-                  </div>
+                  <AnimatedProgressBar
+                    value={pct}
+                    delay={idx * 0.05}
+                    trackClassName="w-full h-2 bg-slate-200 rounded-full overflow-hidden mt-1"
+                    barClassName="h-full bg-amber-500 rounded-full"
+                  />
                 </div>
               );
             })}

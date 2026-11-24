@@ -34,6 +34,8 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { AnimatedCounter } from '../common/AnimatedCounter';
+import { AnimatedProgressBar } from '../common/AnimatedProgressBar';
 import { exportOccupationReportPDF, exportOccupationReportCSV } from '../../utils/occupationReportExport';
 
 interface OccupationStatsChartProps {
@@ -314,8 +316,8 @@ export const OccupationStatsChart: React.FC<OccupationStatsChartProps> = ({
                   initial={{ opacity: 0, y: 6, scale: 0.96 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: 6, scale: 0.96 }}
-                  transition={{ duration: 0.15 }}
-                  className="absolute right-0 mt-2 w-64 bg-white rounded-2xl shadow-xl border border-slate-200 p-2 z-50 space-y-1"
+                  transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                  className="absolute right-0 mt-2 w-64 bg-white/95 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200/80 p-2 z-50 space-y-1"
                 >
                   <div className="px-2.5 py-1.5 border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                     Pilih Format Berkas
@@ -415,7 +417,8 @@ export const OccupationStatsChart: React.FC<OccupationStatsChartProps> = ({
                         dataKey="value"
                         radius={[8, 8, 0, 0]}
                         barSize={36}
-                        animationDuration={800}
+                        animationDuration={900}
+                        animationEasing="ease-out"
                       >
                         {chartData.map((entry, index) => (
                           <Cell
@@ -440,7 +443,8 @@ export const OccupationStatsChart: React.FC<OccupationStatsChartProps> = ({
                         outerRadius={105}
                         paddingAngle={4}
                         dataKey="value"
-                        animationDuration={800}
+                        animationDuration={900}
+                        animationEasing="ease-out"
                       >
                         {chartData.map((entry, index) => (
                           <Cell
@@ -472,7 +476,7 @@ export const OccupationStatsChart: React.FC<OccupationStatsChartProps> = ({
                 <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none pb-8">
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Jiwa</span>
                   <span className="text-xl font-black text-slate-900 font-mono">
-                    {totalCount.toLocaleString('id-ID')}
+                    <AnimatedCounter value={totalCount} />
                   </span>
                 </div>
               )}
@@ -514,24 +518,21 @@ export const OccupationStatsChart: React.FC<OccupationStatsChartProps> = ({
 
                       <div className="text-right pl-2">
                         <div className="text-xs font-black text-slate-900 font-mono">
-                          {sector.count.toLocaleString('id-ID')} <span className="text-[10px] font-normal text-slate-400">Jiwa</span>
+                          <AnimatedCounter value={sector.count} /> <span className="text-[10px] font-normal text-slate-400">Jiwa</span>
                         </div>
-                        <div className="text-[10px] font-bold" style={{ color: sector.color }}>
+                        <div className="text-[10px] font-bold tabular-nums" style={{ color: sector.color }}>
                           {sector.percentage}%
                         </div>
                       </div>
                     </div>
 
                     {/* Micro Progress Bar */}
-                    <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-2">
-                      <div
-                        className="h-full rounded-full transition-all duration-500"
-                        style={{
-                          width: `${Math.min(sector.percentage, 100)}%`,
-                          backgroundColor: sector.color
-                        }}
-                      />
-                    </div>
+                    <AnimatedProgressBar
+                      value={sector.percentage}
+                      trackClassName="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-2"
+                      barClassName="h-full rounded-full"
+                      barStyle={{ backgroundColor: sector.color }}
+                    />
                   </div>
                 );
               })}

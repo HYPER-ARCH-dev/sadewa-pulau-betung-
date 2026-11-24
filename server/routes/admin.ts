@@ -12,7 +12,7 @@ import {
   getUserById
 } from '../db/prisma-helpers';
 import { getDb, saveDb, seedInitialData } from '../db/database';
-import { authenticateToken, requireRoles, AuthenticatedRequest, verifyPassword, hashPassword, generateSalt, createToken } from '../auth';
+import { authenticateToken, requireRoles, requireRolesOrPermission, hasModulePermission, AuthenticatedRequest, verifyPassword, hashPassword, generateSalt, createToken } from '../auth';
 import { assignServerLetterNumberAtomic } from '../services/letterNumbering';
 import { clearSupabaseStorageBucket } from './upload';
 import {
@@ -185,7 +185,7 @@ export async function recalculateVillageProfileStats(prisma: any) {
   }
 }
 
-router.get('/residents', requireRoles('super_admin', 'admin_desa', 'operator', 'admin_posyandu'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.get('/residents', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'admin_posyandu'], ['residents']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     if (!(await isDatabaseAvailableCached())) {
       const db = getDb();
@@ -397,7 +397,7 @@ router.get('/residents', requireRoles('super_admin', 'admin_desa', 'operator', '
   }
 });
 
-router.post('/residents', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.post('/residents', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator'], ['residents']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { 
       nik, kkNumber, kk, fullName, name, gender, 
@@ -482,7 +482,7 @@ router.post('/residents', requireRoles('super_admin', 'admin_desa', 'operator'),
   }
 });
 
-router.delete('/residents/:id', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.delete('/residents/:id', requireRolesOrPermission(['super_admin', 'admin_desa'], ['residents']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     const resident = await getPrisma().resident.delete({
@@ -509,7 +509,7 @@ router.delete('/residents/:id', requireRoles('super_admin', 'admin_desa'), async
   }
 });
 
-router.put('/residents/:id', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.put('/residents/:id', requireRolesOrPermission(['super_admin', 'admin_desa'], ['residents']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     const { fullName, nik, gender, birthPlace, birthDate, address, dusunId, rwId, rtId, status } = req.body;
@@ -875,7 +875,7 @@ router.post('/residents/sync-profile', requireRoles('super_admin', 'admin_desa',
 });
 
 // 2b. Bansos Management
-router.get('/bansos', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.get('/bansos', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator'], ['bansos']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     if (!(await isDatabaseAvailableCached())) {
       const db = getDb();
@@ -891,7 +891,7 @@ router.get('/bansos', requireRoles('super_admin', 'admin_desa', 'operator'), asy
   }
 });
 
-router.post('/bansos', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.post('/bansos', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator'], ['bansos']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { residentId, programName, fiscalYear, stageOrMonth, nominalAmount, status, notes } = req.body;
     if (!(await isDatabaseAvailableCached())) {
@@ -935,7 +935,7 @@ router.post('/bansos', requireRoles('super_admin', 'admin_desa', 'operator'), as
 });
 
 // 2c. Posyandu / Toddler Management
-router.get('/toddlers', requireRoles('super_admin', 'admin_desa', 'operator', 'admin_posyandu'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.get('/toddlers', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'admin_posyandu'], ['posyandu']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     if (!(await isDatabaseAvailableCached())) {
       const db = getDb();
@@ -956,7 +956,7 @@ router.get('/toddlers', requireRoles('super_admin', 'admin_desa', 'operator', 'a
   }
 });
 
-router.post('/toddlers', requireRoles('super_admin', 'admin_desa', 'operator', 'admin_posyandu'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.post('/toddlers', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'admin_posyandu'], ['posyandu']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { name, nik, gender, birthDate, parentName, parentNik, parentPhone, dusunName, rtRw, address, coordinates, kmsCardNumber, birthWeightKg, birthHeightCm, isInterventionTarget } = req.body;
     if (!(await isDatabaseAvailableCached())) {
@@ -1022,7 +1022,7 @@ router.post('/toddlers', requireRoles('super_admin', 'admin_desa', 'operator', '
   }
 });
 
-router.put('/toddlers/:id', requireRoles('super_admin', 'admin_desa', 'operator', 'admin_posyandu'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.put('/toddlers/:id', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'admin_posyandu'], ['posyandu']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     const { name, nik, gender, birthDate, parentName, parentNik, parentPhone, dusunName, rtRw, address, coordinates, kmsCardNumber, birthWeightKg, birthHeightCm, isInterventionTarget } = req.body;
@@ -1075,7 +1075,7 @@ router.put('/toddlers/:id', requireRoles('super_admin', 'admin_desa', 'operator'
   }
 });
 
-router.delete('/toddlers/:id', requireRoles('super_admin', 'admin_desa', 'operator', 'admin_posyandu'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.delete('/toddlers/:id', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'admin_posyandu'], ['posyandu']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     if (!(await isDatabaseAvailableCached())) {
@@ -1102,7 +1102,7 @@ router.delete('/toddlers/:id', requireRoles('super_admin', 'admin_desa', 'operat
   }
 });
 
-router.post('/toddlers/measurements', requireRoles('super_admin', 'admin_desa', 'operator', 'admin_posyandu'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.post('/toddlers/measurements', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'admin_posyandu'], ['posyandu']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { toddlerId, measurementDate, weight, weightKg, height, heightCm, headCircumference, headCircumferenceCm, notes, ageInMonths, vitA, deworming, immunizationStatus, zScoreHeightForAge, zScoreWeightForAge, zScoreWeightForHeight, stuntingCategory, weightCategory, overallStatus } = req.body;
     const finalWeight = Number(weightKg ?? weight);
@@ -1167,7 +1167,129 @@ router.post('/toddlers/measurements', requireRoles('super_admin', 'admin_desa', 
   }
 });
 
-router.get('/requests', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+// 2d. Posyandu Schedules CRUD
+router.get('/posyandu/schedules', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'admin_posyandu'], ['posyandu']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+  try {
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb() as any;
+      return res.json({ success: true, degraded: true, data: db.posyanduSchedules || [] });
+    }
+    const schedules = await getPrisma().posyanduSchedule.findMany({
+      orderBy: { scheduleDate: 'asc' }
+    });
+    return res.json({ success: true, data: schedules });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: 'Gagal memuat jadwal Posyandu.' });
+  }
+});
+
+router.post('/posyandu/schedules', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'admin_posyandu'], ['posyandu']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+  try {
+    const { posyanduName, dusunName, location, scheduleDate, startTime, endTime, cadreInCharge, bidanInCharge, notes } = req.body;
+    if (!posyanduName || !dusunName || !location || !scheduleDate) {
+      return res.status(400).json({ success: false, error: 'Nama Posyandu, Dusun, Lokasi, dan Tanggal wajib diisi.' });
+    }
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb() as any;
+      db.posyanduSchedules = db.posyanduSchedules || [];
+      const created = {
+        id: generateServerId('pos-sch'),
+        posyanduName: String(posyanduName).trim(),
+        dusunName: String(dusunName).trim(),
+        location: String(location).trim(),
+        scheduleDate: String(scheduleDate),
+        startTime: String(startTime || '08:00'),
+        endTime: String(endTime || '11:30'),
+        cadreInCharge: String(cadreInCharge || '-').trim(),
+        bidanInCharge: String(bidanInCharge || '-').trim(),
+        notes: notes ? String(notes).trim() : ''
+      };
+      db.posyanduSchedules.push(created);
+      saveDb(db);
+      return res.status(201).json({ success: true, degraded: true, data: created });
+    }
+
+    const created = await getPrisma().posyanduSchedule.create({
+      data: {
+        posyanduName: String(posyanduName).trim(),
+        dusunName: String(dusunName).trim(),
+        location: String(location).trim(),
+        scheduleDate: new Date(scheduleDate),
+        startTime: String(startTime || '08:00'),
+        endTime: String(endTime || '11:30'),
+        cadreInCharge: String(cadreInCharge || '-').trim(),
+        bidanInCharge: String(bidanInCharge || '-').trim(),
+        notes: notes ? String(notes).trim() : null
+      }
+    });
+
+    await recordAuditLogDb(
+      req.user!.userId,
+      req.user!.name,
+      req.user!.role,
+      'Tambah Jadwal Posyandu',
+      'e-Posyandu',
+      `Menjadwalkan ${created.posyanduName} (${created.dusunName})`,
+      req.ip || '127.0.0.1'
+    );
+
+    return res.status(201).json({ success: true, data: created });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: 'Gagal menambahkan jadwal Posyandu.' });
+  }
+});
+
+router.put('/posyandu/schedules/:id', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'admin_posyandu'], ['posyandu']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+  try {
+    const { id } = req.params;
+    const { posyanduName, dusunName, location, scheduleDate, startTime, endTime, cadreInCharge, bidanInCharge, notes } = req.body;
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb() as any;
+      db.posyanduSchedules = db.posyanduSchedules || [];
+      const idx = db.posyanduSchedules.findIndex((s: any) => s.id === id);
+      if (idx === -1) return res.status(404).json({ success: false, error: 'Jadwal Posyandu tidak ditemukan.' });
+      db.posyanduSchedules[idx] = { ...db.posyanduSchedules[idx], ...req.body, id };
+      saveDb(db);
+      return res.json({ success: true, degraded: true, data: db.posyanduSchedules[idx] });
+    }
+
+    const updated = await getPrisma().posyanduSchedule.update({
+      where: { id },
+      data: {
+        posyanduName: posyanduName !== undefined ? String(posyanduName).trim() : undefined,
+        dusunName: dusunName !== undefined ? String(dusunName).trim() : undefined,
+        location: location !== undefined ? String(location).trim() : undefined,
+        scheduleDate: scheduleDate ? new Date(scheduleDate) : undefined,
+        startTime: startTime !== undefined ? String(startTime) : undefined,
+        endTime: endTime !== undefined ? String(endTime) : undefined,
+        cadreInCharge: cadreInCharge !== undefined ? String(cadreInCharge).trim() : undefined,
+        bidanInCharge: bidanInCharge !== undefined ? String(bidanInCharge).trim() : undefined,
+        notes: notes !== undefined ? (notes ? String(notes).trim() : null) : undefined
+      }
+    });
+    return res.json({ success: true, data: updated });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: 'Gagal memperbarui jadwal Posyandu.' });
+  }
+});
+
+router.delete('/posyandu/schedules/:id', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'admin_posyandu'], ['posyandu']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+  try {
+    const { id } = req.params;
+    if (!(await isDatabaseAvailableCached())) {
+      const db = getDb() as any;
+      db.posyanduSchedules = (db.posyanduSchedules || []).filter((s: any) => s.id !== id);
+      saveDb(db);
+      return res.json({ success: true, degraded: true, message: 'Jadwal Posyandu berhasil dihapus.' });
+    }
+    await getPrisma().posyanduSchedule.delete({ where: { id } });
+    return res.json({ success: true, message: 'Jadwal Posyandu berhasil dihapus.' });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, error: 'Gagal menghapus jadwal Posyandu.' });
+  }
+});
+
+router.get('/requests', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator'], ['services']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     if (!(await isDatabaseAvailableCached())) {
       const db = getDb();
@@ -1182,7 +1304,7 @@ router.get('/requests', requireRoles('super_admin', 'admin_desa', 'operator'), a
   }
 });
 
-router.put('/requests/:id/status', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.put('/requests/:id/status', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator'], ['services']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   const { id } = req.params;
   const {
     status,
@@ -1369,7 +1491,7 @@ router.put('/requests/:id/status', requireRoles('super_admin', 'admin_desa', 'op
 });
 
 // Delete Single Service Request (records audit log & stores into deletedServiceRequests archive)
-router.delete('/requests/:id', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.delete('/requests/:id', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator'], ['services']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   const { id } = req.params;
   const reason = (req.body?.reason || req.query?.reason || 'Data Uji Coba / Testing').toString();
   const prisma = getPrisma();
@@ -1434,7 +1556,7 @@ router.delete('/requests/:id', requireRoles('super_admin', 'admin_desa', 'operat
 });
 
 // Bulk Delete Service Requests (for bulk testing data cleanup)
-router.post('/requests/bulk-delete', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.post('/requests/bulk-delete', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator'], ['services']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   const { ids, reason } = req.body;
   if (!Array.isArray(ids) || ids.length === 0) {
     return res.status(400).json({ success: false, error: 'Daftar ID permohonan tidak valid.' });
@@ -1507,7 +1629,7 @@ router.post('/requests/bulk-delete', requireRoles('super_admin', 'admin_desa', '
 });
 
 // Get Deleted Service Requests Log
-router.get('/requests/deleted', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.get('/requests/deleted', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator'], ['services']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     if (!(await isDatabaseAvailableCached())) {
       const db = getDb();
@@ -1523,7 +1645,7 @@ router.get('/requests/deleted', requireRoles('super_admin', 'admin_desa', 'opera
 });
 
 // Restore Deleted Service Request
-router.post('/requests/deleted/:id/restore', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.post('/requests/deleted/:id/restore', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator'], ['services']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   const { id } = req.params;
   const searchId = (id || '').trim();
 
@@ -1686,7 +1808,7 @@ router.post('/requests/deleted/clear-all', requireRoles('super_admin'), async (r
 });
 
 // 3. Complaints Management (Operator, Admin Desa, Super Admin)
-router.get('/complaints', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.get('/complaints', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator'], ['complaints']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     if (!(await isDatabaseAvailableCached())) {
       const db = getDb();
@@ -1701,7 +1823,7 @@ router.get('/complaints', requireRoles('super_admin', 'admin_desa', 'operator'),
   }
 });
 
-router.put('/complaints/:id/respond', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.put('/complaints/:id/respond', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator'], ['complaints']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     const { response, status, fotoBuktiPenyelesaian, catatanTindakLanjut } = req.body;
@@ -1761,7 +1883,7 @@ router.put('/complaints/:id/respond', requireRoles('super_admin', 'admin_desa', 
 });
 
 // 4. News CRUD (Editor, Operator, Admin Desa, Super Admin)
-router.get('/news', requireRoles('super_admin', 'admin_desa', 'operator', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.get('/news', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'editor'], ['news']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     if (!(await isDatabaseAvailableCached())) {
       const db = getDb();
@@ -1776,7 +1898,7 @@ router.get('/news', requireRoles('super_admin', 'admin_desa', 'operator', 'edito
   }
 });
 
-router.post('/news', requireRoles('super_admin', 'admin_desa', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.post('/news', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'editor'], ['news']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { title, summary, content, category, imageUrl, coverImage, author, isPublished } = req.body;
     if (!title || !content) {
@@ -1842,7 +1964,7 @@ router.post('/news', requireRoles('super_admin', 'admin_desa', 'editor'), async 
   }
 });
 
-router.put('/news/:id', requireRoles('super_admin', 'admin_desa', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.put('/news/:id', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'editor'], ['news']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     const { title, summary, content, category, imageUrl, coverImage, author, isPublished } = req.body;
@@ -1893,7 +2015,7 @@ router.put('/news/:id', requireRoles('super_admin', 'admin_desa', 'editor'), asy
   }
 });
 
-router.delete('/news/:id', requireRoles('super_admin', 'admin_desa', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.delete('/news/:id', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'editor'], ['news']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     if (!(await isDatabaseAvailableCached())) {
@@ -1922,7 +2044,7 @@ router.delete('/news/:id', requireRoles('super_admin', 'admin_desa', 'editor'), 
 });
 
 // 5. Announcements CRUD (Editor, Admin Desa, Super Admin)
-router.post('/announcements', requireRoles('super_admin', 'admin_desa', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.post('/announcements', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'editor'], ['announcements', 'news']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { title, content, priority, validUntil } = req.body;
     if (!title || !content) {
@@ -1972,7 +2094,7 @@ router.post('/announcements', requireRoles('super_admin', 'admin_desa', 'editor'
   }
 });
 
-router.put('/announcements/:id', requireRoles('super_admin', 'admin_desa', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.put('/announcements/:id', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'editor'], ['announcements', 'news']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     const { title, content, priority, validUntil, isActive } = req.body;
@@ -2013,7 +2135,7 @@ router.put('/announcements/:id', requireRoles('super_admin', 'admin_desa', 'edit
   }
 });
 
-router.delete('/announcements/:id', requireRoles('super_admin', 'admin_desa', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.delete('/announcements/:id', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'editor'], ['announcements', 'news']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     if (!(await isDatabaseAvailableCached())) {
@@ -2042,7 +2164,7 @@ router.delete('/announcements/:id', requireRoles('super_admin', 'admin_desa', 'e
 });
 
 // 6. Agendas CRUD (Editor, Admin Desa, Super Admin)
-router.post('/agendas', requireRoles('super_admin', 'admin_desa', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.post('/agendas', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'editor'], ['announcements', 'news']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { title, date, time, location, organizer, description, category } = req.body;
     if (!title || !date || !location) {
@@ -2096,7 +2218,7 @@ router.post('/agendas', requireRoles('super_admin', 'admin_desa', 'editor'), asy
   }
 });
 
-router.put('/agendas/:id', requireRoles('super_admin', 'admin_desa', 'operator', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.put('/agendas/:id', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'editor'], ['announcements', 'news']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     const { title, date, time, location, organizer, description, category, status } = req.body;
@@ -2140,7 +2262,7 @@ router.put('/agendas/:id', requireRoles('super_admin', 'admin_desa', 'operator',
   }
 });
 
-router.delete('/agendas/:id', requireRoles('super_admin', 'admin_desa', 'operator', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.delete('/agendas/:id', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'editor'], ['announcements', 'news']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     if (!(await isDatabaseAvailableCached())) {
@@ -2168,7 +2290,7 @@ router.delete('/agendas/:id', requireRoles('super_admin', 'admin_desa', 'operato
 });
 
 // 7. Development Projects CRUD (Admin Desa, Super Admin)
-router.post('/projects', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.post('/projects', requireRolesOrPermission(['super_admin', 'admin_desa'], ['apbdes']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { title, location, year, fiscalYear, budget, source, fundingSource, contractor, progress, progressPercent, status, description, imageUrl } = req.body;
     if (!title || !location || budget === undefined) {
@@ -2233,7 +2355,7 @@ router.post('/projects', requireRoles('super_admin', 'admin_desa'), async (req: 
   }
 });
 
-router.put('/projects/:id', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.put('/projects/:id', requireRolesOrPermission(['super_admin', 'admin_desa'], ['apbdes']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     const { progress, progressPercent } = req.body;
@@ -2282,7 +2404,7 @@ router.put('/projects/:id', requireRoles('super_admin', 'admin_desa'), async (re
 });
 
 // 8. UMKM Verification (Admin Desa, Super Admin)
-router.put('/umkm/:id/verify', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.put('/umkm/:id/verify', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'editor'], ['umkm']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     if (!(await isDatabaseAvailableCached())) {
@@ -2329,7 +2451,7 @@ router.put('/umkm/:id/verify', requireRoles('super_admin', 'admin_desa'), async 
   }
 });
 
-router.post('/umkm', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.post('/umkm', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'editor'], ['umkm']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { name, ownerName, category, description, products, imageUrl, location, whatsappContact } = req.body;
     if (!name || !ownerName) {
@@ -2407,7 +2529,7 @@ router.post('/umkm', requireRoles('super_admin', 'admin_desa'), async (req: Auth
   }
 });
 
-router.put('/umkm/:id', requireRoles('super_admin', 'admin_desa', 'operator', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.put('/umkm/:id', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'editor'], ['umkm']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     const { name, ownerName, category, description, products, imageUrl, location, whatsappContact, phone, priceRange, isVerified } = req.body;
@@ -2454,7 +2576,7 @@ router.put('/umkm/:id', requireRoles('super_admin', 'admin_desa', 'operator', 'e
   }
 });
 
-router.delete('/umkm/:id', requireRoles('super_admin', 'admin_desa', 'operator', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.delete('/umkm/:id', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'editor'], ['umkm']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     if (!(await isDatabaseAvailableCached())) {
@@ -2482,7 +2604,7 @@ router.delete('/umkm/:id', requireRoles('super_admin', 'admin_desa', 'operator',
 });
 
 // 7b. Delete Development Project (Operator, Admin Desa, Super Admin)
-router.delete('/projects/:id', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.delete('/projects/:id', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator'], ['apbdes']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     if (!(await isDatabaseAvailableCached())) {
@@ -2510,7 +2632,7 @@ router.delete('/projects/:id', requireRoles('super_admin', 'admin_desa', 'operat
 });
 
 // 7c. Village Potentials CRUD (Admin Desa, Super Admin)
-router.post('/potentials', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.post('/potentials', requireRolesOrPermission(['super_admin', 'admin_desa'], ['potential']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { name, category, description, highlightStat, imageUrl, keyCommodities, keyOpportunities } = req.body;
     if (!name) {
@@ -2562,7 +2684,7 @@ router.post('/potentials', requireRoles('super_admin', 'admin_desa'), async (req
   }
 });
 
-router.put('/potentials/:id', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.put('/potentials/:id', requireRolesOrPermission(['super_admin', 'admin_desa'], ['potential']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     const { name, category, description, highlightStat, imageUrl, keyCommodities, keyOpportunities } = req.body;
@@ -2605,7 +2727,7 @@ router.put('/potentials/:id', requireRoles('super_admin', 'admin_desa'), async (
   }
 });
 
-router.delete('/potentials/:id', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.delete('/potentials/:id', requireRolesOrPermission(['super_admin', 'admin_desa'], ['potential']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     if (!(await isDatabaseAvailableCached())) {
@@ -2633,7 +2755,7 @@ router.delete('/potentials/:id', requireRoles('super_admin', 'admin_desa'), asyn
 });
 
 // 7d. APBDes / Budget Management (Admin Desa, Super Admin)
-router.get('/budget', requireRoles('super_admin', 'admin_desa', 'operator'), async (_req: AuthenticatedRequest, res: ExpressResponse) => {
+router.get('/budget', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator'], ['apbdes']), async (_req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     if (!(await isDatabaseAvailableCached())) {
       const db = getDb();
@@ -2652,7 +2774,7 @@ router.get('/budget', requireRoles('super_admin', 'admin_desa', 'operator'), asy
   }
 });
 
-router.put('/budget', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.put('/budget', requireRolesOrPermission(['super_admin', 'admin_desa'], ['apbdes']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const payload = req.body || {};
     const year = Number(payload.year) || 2026;
@@ -2723,7 +2845,7 @@ router.put('/budget', requireRoles('super_admin', 'admin_desa'), async (req: Aut
 });
 
 // 9. Village Officials Management (Aparatur, RT, RW, Karang Taruna, BPD, PKK)
-router.post('/officials', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.post('/officials', requireRolesOrPermission(['super_admin', 'admin_desa'], ['officials']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { name, position, section, nip, bio, imageUrl, tenure, phone, gender, birthDate, isActive, displayOrder } = req.body;
     if (!name || !position) {
@@ -2795,7 +2917,7 @@ router.post('/officials', requireRoles('super_admin', 'admin_desa'), async (req:
   }
 });
 
-router.put('/officials/:id', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.put('/officials/:id', requireRolesOrPermission(['super_admin', 'admin_desa'], ['officials']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     const { name, position, section, nip, bio, imageUrl, tenure, phone, gender, birthDate, isActive, displayOrder } = req.body;
@@ -2849,7 +2971,7 @@ router.put('/officials/:id', requireRoles('super_admin', 'admin_desa'), async (r
   }
 });
 
-router.delete('/officials/:id', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.delete('/officials/:id', requireRolesOrPermission(['super_admin', 'admin_desa'], ['officials']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     if (!(await isDatabaseAvailableCached())) {
@@ -2893,7 +3015,7 @@ router.get('/profile', requireRoles('super_admin', 'admin_desa', 'operator', 'ed
   }
 });
 
-router.put('/profile', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.put('/profile', requireRolesOrPermission(['super_admin', 'admin_desa'], ['profile']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { 
       villageName, kadesName, kadesNip, district, email, phone, 
@@ -2914,14 +3036,23 @@ router.put('/profile', requireRoles('super_admin', 'admin_desa'), async (req: Au
     }
 
     const userRole = req.user!.role;
+    const normUrl = (val: unknown) => (typeof val === 'string' ? val.trim() : '');
 
     if (!(await isDatabaseAvailableCached())) {
       const db = getDb();
       const existingFallback = db.villageProfile || ({} as any);
-      if (sadewaLogoUrl !== undefined && existingFallback.sadewaLogoUrl !== sadewaLogoUrl && userRole !== 'super_admin') {
+      if (
+        sadewaLogoUrl !== undefined &&
+        normUrl(existingFallback.sadewaLogoUrl) !== normUrl(sadewaLogoUrl) &&
+        userRole !== 'super_admin'
+      ) {
         return res.status(403).json({ success: false, error: 'Akses Ditolak: Hanya Super Admin yang boleh mengubah Logo Induk SADEWA.' });
       }
-      if ((req.body.sadewaIconUrl !== undefined) && existingFallback.sadewaIconUrl !== req.body.sadewaIconUrl && userRole !== 'super_admin') {
+      if (
+        req.body.sadewaIconUrl !== undefined &&
+        normUrl(existingFallback.sadewaIconUrl) !== normUrl(req.body.sadewaIconUrl) &&
+        userRole !== 'super_admin'
+      ) {
         return res.status(403).json({ success: false, error: 'Akses Ditolak: Hanya Super Admin yang boleh mengubah Ikon Simbol SADEWA.' });
       }
       db.villageProfile = { ...existingFallback, ...req.body, lastUpdated: new Date().toISOString() };
@@ -2936,20 +3067,33 @@ router.put('/profile', requireRoles('super_admin', 'admin_desa'), async (req: Au
     });
 
     // Guards: Ganti Logo Induk & Favicon (Hanya Super Admin)
-    if (sadewaLogoUrl !== undefined && (!existing || existing.sadewaLogoUrl !== sadewaLogoUrl)) {
+    if (
+      sadewaLogoUrl !== undefined &&
+      normUrl(existing?.sadewaLogoUrl) !== normUrl(sadewaLogoUrl)
+    ) {
       if (userRole !== 'super_admin') {
         return res.status(403).json({ success: false, error: 'Akses Ditolak: Hanya Super Admin yang boleh mengubah Logo Induk SADEWA.' });
       }
     }
-    if (sadewaIconUrl !== undefined && (!existing || existing.sadewaIconUrl !== sadewaIconUrl)) {
+    if (
+      sadewaIconUrl !== undefined &&
+      normUrl(existing?.sadewaIconUrl) !== normUrl(sadewaIconUrl)
+    ) {
       if (userRole !== 'super_admin') {
         return res.status(403).json({ success: false, error: 'Akses Ditolak: Hanya Super Admin yang boleh mengubah Ikon Simbol SADEWA.' });
       }
     }
 
-    // Guards: Banner Utama Beranda (Hanya Super Admin atau Admin Desa)
-    if (heroBackgroundUrl !== undefined && (!existing || existing.heroBackgroundUrl !== heroBackgroundUrl)) {
-      if (userRole !== 'super_admin' && userRole !== 'admin_desa') {
+    // Guards: Banner Utama Beranda (Super Admin, Admin Desa, atau pemegang izin modul profile)
+    if (
+      heroBackgroundUrl !== undefined &&
+      normUrl(existing?.heroBackgroundUrl) !== normUrl(heroBackgroundUrl)
+    ) {
+      if (
+        userRole !== 'super_admin' &&
+        userRole !== 'admin_desa' &&
+        !hasModulePermission(req.user!.permissions, ['profile'])
+      ) {
         return res.status(403).json({ success: false, error: 'Akses Ditolak: Hanya Super Admin atau Admin Desa yang boleh mengubah Banner Hero Utama.' });
       }
     }
@@ -3101,7 +3245,7 @@ router.put('/profile', requireRoles('super_admin', 'admin_desa'), async (req: Au
 });
 
 // 9c. Master Wilayah Hirarkis (Dusun -> RW -> RT) Management
-router.get('/territories', requireRoles('super_admin', 'admin_desa', 'operator', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.get('/territories', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'editor'], ['territories']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     if (!(await isDatabaseAvailableCached())) {
       const db = getDb();
@@ -3124,7 +3268,7 @@ router.get('/territories', requireRoles('super_admin', 'admin_desa', 'operator',
   }
 });
 
-router.put('/territories', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.put('/territories', requireRolesOrPermission(['super_admin', 'admin_desa'], ['territories']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   const { territories } = req.body;
   if (!Array.isArray(territories)) {
     return res.status(400).json({ success: false, error: 'Format data wilayah harus berupa array susunan Dusun/RW/RT.' });
@@ -3302,7 +3446,7 @@ router.put('/territories', requireRoles('super_admin', 'admin_desa'), async (req
 });
 
 // 10. Facilities & Village Places (Fasilitas, Titik Peta, & Lokasi Desa)
-router.post('/facilities', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.post('/facilities', requireRolesOrPermission(['super_admin', 'admin_desa'], ['facilities']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { name, category, address, dusun, coordinatesLabel, description, coordinates, imageUrl, contact } = req.body;
     if (!name || !address) {
@@ -3359,7 +3503,7 @@ router.post('/facilities', requireRoles('super_admin', 'admin_desa'), async (req
   }
 });
 
-router.put('/facilities/:id', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.put('/facilities/:id', requireRolesOrPermission(['super_admin', 'admin_desa'], ['facilities']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     if (!(await isDatabaseAvailableCached())) {
@@ -3392,7 +3536,7 @@ router.put('/facilities/:id', requireRoles('super_admin', 'admin_desa'), async (
   }
 });
 
-router.delete('/facilities/:id', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.delete('/facilities/:id', requireRolesOrPermission(['super_admin', 'admin_desa'], ['facilities']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     if (!(await isDatabaseAvailableCached())) {
@@ -3844,7 +3988,7 @@ router.get('/backups/download/:filename', requireRoles('super_admin'), async (re
 // router.post('/backups/restore', ...)
 
 // 13. KPM (Keluarga Penerima Manfaat) / Bansos Management
-router.get('/kpm', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.get('/kpm', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator'], ['bansos']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     if (!(await isDatabaseAvailableCached())) {
       const db = getDb();
@@ -3899,7 +4043,7 @@ router.get('/kpm', requireRoles('super_admin', 'admin_desa', 'operator'), async 
   }
 });
 
-router.post('/kpm', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.post('/kpm', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator'], ['bansos']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     let { residentId, nik, programName, fiscalYear, stageOrMonth, period, nominalAmount, nominalOrItem, status, notes, keterangan } = req.body;
 
@@ -3979,7 +4123,7 @@ router.post('/kpm', requireRoles('super_admin', 'admin_desa', 'operator'), async
   }
 });
 
-router.put('/kpm/:id', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.put('/kpm/:id', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator'], ['bansos']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     if (!(await isDatabaseAvailableCached())) {
@@ -4026,7 +4170,7 @@ router.put('/kpm/:id', requireRoles('super_admin', 'admin_desa', 'operator'), as
   }
 });
 
-router.delete('/kpm/:id', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.delete('/kpm/:id', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator'], ['bansos']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     if (!(await isDatabaseAvailableCached())) {
@@ -4043,7 +4187,7 @@ router.delete('/kpm/:id', requireRoles('super_admin', 'admin_desa', 'operator'),
 });
 
 // 14. WebGIS & Spasial Land Parcels CRUD
-router.get('/land-parcels', requireRoles('super_admin', 'admin_desa', 'operator', 'editor'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.get('/land-parcels', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator', 'editor'], ['webgis']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     if (!(await isDatabaseAvailableCached())) {
       const db = getDb();
@@ -4058,7 +4202,7 @@ router.get('/land-parcels', requireRoles('super_admin', 'admin_desa', 'operator'
   }
 });
 
-router.post('/land-parcels', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.post('/land-parcels', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator'], ['webgis']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const data = req.body;
     if (!(await isDatabaseAvailableCached())) {
@@ -4112,7 +4256,7 @@ router.post('/land-parcels', requireRoles('super_admin', 'admin_desa', 'operator
   }
 });
 
-router.put('/land-parcels/:id', requireRoles('super_admin', 'admin_desa', 'operator'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.put('/land-parcels/:id', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator'], ['webgis']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     const data = req.body;
@@ -4157,7 +4301,7 @@ router.put('/land-parcels/:id', requireRoles('super_admin', 'admin_desa', 'opera
   }
 });
 
-router.delete('/land-parcels/:id', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.delete('/land-parcels/:id', requireRolesOrPermission(['super_admin', 'admin_desa'], ['webgis']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     if (!(await isDatabaseAvailableCached())) {
@@ -4264,7 +4408,7 @@ router.delete('/maintenance/backups/:filename', requireRoles('super_admin'), (re
 });
 
 // FIX 7: Complaint Moderation Endpoint
-router.put('/complaints/:id/visibility', requireRoles('super_admin', 'admin_desa'), async (req: AuthenticatedRequest, res: ExpressResponse) => {
+router.put('/complaints/:id/visibility', requireRolesOrPermission(['super_admin', 'admin_desa', 'operator'], ['complaints']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
     const { isPublic } = req.body;

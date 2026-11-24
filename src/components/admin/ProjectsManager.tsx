@@ -19,6 +19,7 @@ import {
   Eye,
   Camera
 } from 'lucide-react';
+import { AnimatedProgressBar } from '../common/AnimatedProgressBar';
 
 const FUNDING_SOURCES = [
   'Dana Desa (DDS)',
@@ -289,12 +290,11 @@ export const ProjectsManager: React.FC = () => {
                       <span className="text-slate-600">Progres Fisik Lapangan:</span>
                       <span className="text-amber-700 font-mono">{proj.progressPercent}%</span>
                     </div>
-                    <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden border border-slate-200/60">
-                      <div
-                        className="bg-amber-500 h-2 rounded-full transition-all duration-300"
-                        style={{ width: `${proj.progressPercent}%` }}
-                      />
-                    </div>
+                    <AnimatedProgressBar
+                      value={proj.progressPercent}
+                      trackClassName="w-full bg-slate-100 rounded-full h-2 overflow-hidden border border-slate-200/60"
+                      barClassName="bg-amber-500 h-full rounded-full"
+                    />
                   </div>
                 </div>
               </div>

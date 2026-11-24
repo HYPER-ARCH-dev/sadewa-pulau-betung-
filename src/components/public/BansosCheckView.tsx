@@ -45,7 +45,9 @@ export const BansosCheckView: React.FC = () => {
     submitBansosComplaint,
     addToast,
     currentUser,
-    navigateTo
+    navigateTo,
+    bansosSearchQuery,
+    setBansosSearchQuery
   } = useApp();
 
   // Search & Filter States
@@ -56,8 +58,14 @@ export const BansosCheckView: React.FC = () => {
   const [isQrVerified, setIsQrVerified] = useState(false);
   const [selectedRecipientForReceipt, setSelectedRecipientForReceipt] = useState<BansosRecipient | null>(null);
 
-  // Auto-search if navigated from QR scan (e.g. ?tab=bansos&nik=1504...&verify=true)
+  // Auto-search if navigated from HomeView quick search or QR scan (e.g. ?tab=bansos&nik=1504...&verify=true)
   React.useEffect(() => {
+    if (bansosSearchQuery && bansosSearchQuery.trim()) {
+      setSearchQuery(bansosSearchQuery.trim());
+      setHasSearched(true);
+      setBansosSearchQuery(null);
+      return;
+    }
     if (typeof window !== 'undefined') {
       const searchParams = new URLSearchParams(window.location.search);
       const nikParam = searchParams.get('nik') || searchParams.get('bansos_nik') || searchParams.get('q') || searchParams.get('search');
@@ -71,7 +79,7 @@ export const BansosCheckView: React.FC = () => {
         }
       }
     }
-  }, []);
+  }, [bansosSearchQuery, setBansosSearchQuery]);
 
   // Active Tab
   const [activeTab, setActiveTab] = useState<'cek_nik' | 'statistik' | 'informasi_program'>('cek_nik');

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { useApp } from '../../context/AppContext';
 import { Search, X, FileText, AlertCircle, Newspaper, Bell, Calendar, Building2, ChevronRight, Shield, QrCode, Coins } from 'lucide-react';
 
@@ -41,8 +42,6 @@ export const GlobalSearch: React.FC = () => {
       setQuery('');
     }
   }, [isSearchOpen]);
-
-  if (!isSearchOpen) return null;
 
   const q = query.trim().toLowerCase();
 
@@ -119,22 +118,34 @@ export const GlobalSearch: React.FC = () => {
     (currentUser ? 1 : 0); // Include admin quick action if logged in
 
   return (
-    <div 
-      role="dialog" 
-      aria-modal="true" 
-      aria-label="Pencarian Terpadu Portal Desa" 
-      className="fixed inset-0 z-50 overflow-y-auto p-4 sm:p-6 md:p-20 flex justify-center items-start"
-    >
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity"
-        onClick={() => setIsSearchOpen(false)}
-        aria-hidden="true"
-      />
+    <AnimatePresence>
+      {isSearchOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Pencarian Terpadu Portal Desa"
+          className="fixed inset-0 z-50 overflow-y-auto p-4 sm:p-6 md:p-20 flex justify-center items-start"
+        >
+          {/* Backdrop */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm"
+            onClick={() => setIsSearchOpen(false)}
+            aria-hidden="true"
+          />
 
-      {/* Modal Container */}
-      <div className="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden z-10 animate-in fade-in duration-200">
-        {/* Search Bar */}
+          {/* Modal Container */}
+          <motion.div
+            initial={{ opacity: 0, y: -12, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -8, scale: 0.97 }}
+            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+            className="relative w-full max-w-2xl bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-slate-200/80 overflow-hidden z-10"
+          >
+            {/* Search Bar */}
         <div className="flex items-center px-4 py-3.5 border-b border-slate-200">
           <Search className="w-5 h-5 text-slate-400 mr-3 shrink-0" aria-hidden="true" />
           <input
@@ -419,8 +430,10 @@ export const GlobalSearch: React.FC = () => {
               )}
             </div>
           )}
-        </div>
+          </div>
+        </motion.div>
       </div>
-    </div>
+      )}
+    </AnimatePresence>
   );
 };

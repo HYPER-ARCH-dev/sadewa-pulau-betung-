@@ -33,6 +33,7 @@ import {
 import { motion } from 'motion/react';
 import { DusunRecord } from '../../types';
 import { useResidents } from '../../hooks/useResidents';
+import { useApp } from '../../context/AppContext';
 
 interface VillageDemographicChartsProps {
   villageName?: string;
@@ -49,21 +50,35 @@ export const VillageDemographicCharts: React.FC<VillageDemographicChartsProps> =
 }) => {
   const [activeTab, setActiveTab] = useState<'dusun' | 'usia' | 'pekerjaan' | 'pendidikan'>('dusun');
   const { residents } = useResidents();
+  const { demographics } = useApp();
 
-  // Sinkronisasi data riil master kependudukan (case-insensitive)
+  // Sinkronisasi data riil master kependudukan:
+  // 1. Prioritas: Admin/Operator yang sedang login (useResidents)
+  // 2. Pengunjung publik: Agregat server aman (/api/public/bootstrap & /api/public/demographics)
   const activeResidents = useMemo(() => residents.filter(r => (r.status || '').toLowerCase() === 'hidup'), [residents]);
-  const hasMasterData = activeResidents.length > 0;
+  const hasAdminMasterData = activeResidents.length > 0;
+  const hasPublicMasterData = !hasAdminMasterData && Boolean(demographics?.hasMasterData && demographics.totalPopulation > 0);
+  const hasMasterData = hasAdminMasterData || hasPublicMasterData;
 
-  const effectiveTotalPopulation = hasMasterData ? activeResidents.length : (totalPopulation || 2845);
+  const effectiveTotalPopulation = hasAdminMasterData
+    ? activeResidents.length
+    : hasPublicMasterData
+    ? demographics!.totalPopulation
+    : (totalPopulation || 2845);
+
   const effectiveTotalFamilies = useMemo(() => {
-    return hasMasterData 
-      ? new Set(activeResidents.map(r => r.kk).filter(Boolean)).size 
-      : (totalFamilies || Math.round(effectiveTotalPopulation / 3.6));
-  }, [hasMasterData, activeResidents, totalFamilies, effectiveTotalPopulation]);
+    if (hasAdminMasterData) {
+      return new Set(activeResidents.map(r => r.kk).filter(Boolean)).size;
+    }
+    if (hasPublicMasterData) {
+      return demographics!.totalFamilies;
+    }
+    return totalFamilies || Math.round(effectiveTotalPopulation / 3.6);
+  }, [hasAdminMasterData, hasPublicMasterData, activeResidents, demographics, totalFamilies, effectiveTotalPopulation]);
 
   // 1. Data Sebaran Penduduk per Dusun (Agregat Wilayah Desa)
   const dusunData = useMemo(() => {
-    if (hasMasterData) {
+    if (hasAdminMasterData) {
       const grouped: Record<string, { total: number; kkSet: Set<string>; laki: number; perempuan: number }> = {};
       activeResidents.forEach(r => {
         const dName = r.dusun || 'Dusun 1';
@@ -85,7 +100,11 @@ export const VillageDemographicCharts: React.FC<VillageDemographicChartsProps> =
       }));
     }
 
-    // Fallback sebaran berbasis wilayah teritorial atau dusun profil
+    if (hasPublicMasterData && demographics?.dusunData && demographics.dusunData.length > 0) {
+      return demographics.dusunData;
+    }
+
+    // Fallback sebaran berbasis wilayah teritorial atau dusun profil (hanya jika tabel warga kosong)
     const fallbackDusuns = territories.length > 0
       ? territories.map((t, idx) => {
           const ratio = idx === 0 ? 0.42 : idx === 1 ? 0.35 : 0.23;
@@ -104,11 +123,11 @@ export const VillageDemographicCharts: React.FC<VillageDemographicChartsProps> =
           { name: 'Dusun III Betung Makmur', total: Math.round(effectiveTotalPopulation * 0.23), kk: Math.round((effectiveTotalPopulation * 0.23) / 3.6), laki: Math.round(effectiveTotalPopulation * 0.23 * 0.51), perempuan: Math.round(effectiveTotalPopulation * 0.23 * 0.49) }
         ];
     return fallbackDusuns;
-  }, [hasMasterData, activeResidents, territories, effectiveTotalPopulation]);
+  }, [hasAdminMasterData, hasPublicMasterData, activeResidents, demographics, territories, effectiveTotalPopulation]);
 
   // 2. Data Piramida / Komposisi Kelompok Usia (Standar BPS/Kemenkes)
   const ageGroupData = useMemo(() => {
-    if (hasMasterData) {
+    if (hasAdminMasterData) {
       const today = new Date();
       const calculateAge = (bDate: string) => {
         if (!bDate) return null;
@@ -162,6 +181,10 @@ export const VillageDemographicCharts: React.FC<VillageDemographicChartsProps> =
       }));
     }
 
+    if (hasPublicMasterData && demographics?.ageGroupData && demographics.ageGroupData.length > 0) {
+      return demographics.ageGroupData;
+    }
+
     // Fallback proporsi usia standar BPS
     const defaultRatios = [
       { range: '0 - 4 Thn (Balita)', ratio: 0.088, color: '#10b981', desc: 'Prioritas e-Posyandu & Pencegahan Stunting' },
@@ -181,11 +204,11 @@ export const VillageDemographicCharts: React.FC<VillageDemographicChartsProps> =
         desc: d.desc
       };
     });
-  }, [hasMasterData, activeResidents, effectiveTotalPopulation]);
+  }, [hasAdminMasterData, hasPublicMasterData, activeResidents, demographics, effectiveTotalPopulation]);
 
   // 3. Mata Pencaharian / Profesi Utama Warga
   const occupationData = useMemo(() => {
-    if (hasMasterData) {
+    if (hasAdminMasterData) {
       const occMap: Record<string, number> = {};
       activeResidents.forEach(r => {
         const occ = r.occupation?.trim() || 'Lainnya';
@@ -204,6 +227,10 @@ export const VillageDemographicCharts: React.FC<VillageDemographicChartsProps> =
       }));
     }
 
+    if (hasPublicMasterData && demographics?.occupationData && demographics.occupationData.length > 0) {
+      return demographics.occupationData;
+    }
+
     const fallbackOcc = [
       { name: 'Petani / Pekebun', pct: '48.5%', ratio: 0.485, color: '#059669' },
       { name: 'Buruh Harian Lepas', pct: '21.0%', ratio: 0.210, color: '#0284c7' },
@@ -219,11 +246,11 @@ export const VillageDemographicCharts: React.FC<VillageDemographicChartsProps> =
       pct: f.pct,
       color: f.color
     }));
-  }, [hasMasterData, activeResidents, effectiveTotalPopulation]);
+  }, [hasAdminMasterData, hasPublicMasterData, activeResidents, demographics, effectiveTotalPopulation]);
 
   // 4. Jenjang Pendidikan Terakhir (Agregat SDM Desa)
   const educationData = useMemo(() => {
-    if (hasMasterData) {
+    if (hasAdminMasterData) {
       const eduMap: Record<string, number> = {};
       activeResidents.forEach(r => {
         const edu = r.education?.trim() || 'Tidak/Belum Sekolah';
@@ -240,6 +267,10 @@ export const VillageDemographicCharts: React.FC<VillageDemographicChartsProps> =
       }));
     }
 
+    if (hasPublicMasterData && demographics?.educationData && demographics.educationData.length > 0) {
+      return demographics.educationData;
+    }
+
     const fallbackEdu = [
       { level: 'SMA / SMK / MA', ratio: 0.42, color: '#3b82f6' },
       { level: 'SMP / MTs', ratio: 0.26, color: '#38bdf8' },
@@ -253,7 +284,7 @@ export const VillageDemographicCharts: React.FC<VillageDemographicChartsProps> =
       total: Math.round(effectiveTotalPopulation * f.ratio),
       color: f.color
     }));
-  }, [hasMasterData, activeResidents, effectiveTotalPopulation]);
+  }, [hasAdminMasterData, hasPublicMasterData, activeResidents, demographics, effectiveTotalPopulation]);
 
   // Custom tooltip formatter untuk Recharts (rupiah / jiwa)
   const renderCustomTooltip = ({ active, payload, label }: any) => {
@@ -289,7 +320,7 @@ export const VillageDemographicCharts: React.FC<VillageDemographicChartsProps> =
             {hasMasterData ? (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold border border-emerald-200">
                 <Database className="w-3 h-3 text-emerald-600" />
-                <span>Live Master Data ({activeResidents.length.toLocaleString('id-ID')} Jiwa)</span>
+                <span>Live Master Data ({effectiveTotalPopulation.toLocaleString('id-ID')} Jiwa)</span>
               </span>
             ) : (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 text-[10px] font-bold">
@@ -344,7 +375,9 @@ export const VillageDemographicCharts: React.FC<VillageDemographicChartsProps> =
           <div className="text-xl sm:text-2xl font-black text-emerald-950 font-serif mt-0.5">
             {effectiveTotalFamilies.toLocaleString('id-ID')} <span className="text-xs font-semibold text-emerald-700">KK</span>
           </div>
-          <div className="text-[10px] text-emerald-600/90 mt-0.5">Rata-rata 3.6 jiwa/keluarga</div>
+          <div className="text-[10px] text-emerald-600/90 mt-0.5">
+            Rata-rata {effectiveTotalFamilies > 0 ? (effectiveTotalPopulation / effectiveTotalFamilies).toFixed(1) : '3.6'} jiwa/keluarga
+          </div>
         </div>
 
         <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-100">

@@ -68,30 +68,35 @@ export const ComplaintStatusBadge: React.FC<{ status: ComplaintStatus }> = ({ st
     case 'diterima':
       return (
         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mr-1.5 animate-pulse"></span>
           Laporan Diterima
         </span>
       );
     case 'diverifikasi':
       return (
         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-100 text-purple-800 border border-purple-200">
+          <span className="w-1.5 h-1.5 rounded-full bg-purple-500 mr-1.5"></span>
           Diverifikasi
         </span>
       );
     case 'diproses':
       return (
         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-sky-100 text-sky-800 border border-sky-200">
+          <span className="w-1.5 h-1.5 rounded-full bg-sky-500 mr-1.5 animate-pulse"></span>
           Sedang Ditindaklanjuti
         </span>
       );
     case 'selesai':
       return (
         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 mr-1.5"></span>
           Selesai Ditangani
         </span>
       );
     case 'ditolak':
       return (
         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-100 text-rose-800 border border-rose-200">
+          <span className="w-1.5 h-1.5 rounded-full bg-rose-500 mr-1.5"></span>
           Tidak Memenuhi Kriteria
         </span>
       );
@@ -115,12 +120,14 @@ export const ProjectStatusBadge: React.FC<{ status: ProjectStatus }> = ({ status
     case 'sedang_berjalan':
       return (
         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mr-1.5 animate-pulse"></span>
           Sedang Dikerjakan
         </span>
       );
     case 'selesai':
       return (
         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 mr-1.5"></span>
           100% Selesai
         </span>
       );
@@ -137,7 +144,8 @@ export const PriorityBadge: React.FC<{ priority: PriorityLevel }> = ({ priority 
   switch (priority) {
     case 'mendesak':
       return (
-        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-rose-600 text-white tracking-wide uppercase">
+        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-bold bg-rose-600 text-white tracking-wide uppercase shadow-2xs">
+          <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span>
           Mendesak
         </span>
       );

@@ -106,30 +106,308 @@ router.get('/tenant-info', (_req: Request, res: ExpressResponse) => {
   });
 });
 
+/**
+ * Agregasi Demografi Publik (Patuh UU PDP No. 27/2022)
+ * Menghitung statistik agregat dari tabel Resident di sisi server.
+ * TIDAK PERNAH mengembalikan NIK, Nomor KK, Nama, Tanggal Lahir, maupun Alamat warga.
+ */
+interface DemographicResidentRow {
+  gender?: string | null;
+  birthDate?: Date | string | null;
+  education?: string | null;
+  occupation?: string | null;
+  kkNumber?: string | null;
+  dusun?: { name?: string | null } | string | null;
+}
+
+function buildEmptyDemographics() {
+  return {
+    hasMasterData: false,
+    totalPopulation: 0,
+    totalFamilies: 0,
+    maleCount: 0,
+    femaleCount: 0,
+    dusunData: [],
+    ageGroupData: [],
+    homeAgeData: [],
+    occupationData: [],
+    educationData: []
+  };
+}
+
+function computePublicDemographics(
+  residents: DemographicResidentRow[],
+  dusunNames: string[] = []
+) {
+  if (!Array.isArray(residents) || residents.length === 0) {
+    return buildEmptyDemographics();
+  }
+
+  const totalPopulation = residents.length;
+  const kkSet = new Set<string>();
+  let maleCount = 0;
+  let femaleCount = 0;
+
+  const dusunMap = new Map<
+    string,
+    { total: number; kkSet: Set<string>; laki: number; perempuan: number }
+  >();
+  for (const dName of dusunNames) {
+    const clean = dName?.trim();
+    if (clean && !dusunMap.has(clean)) {
+      dusunMap.set(clean, { total: 0, kkSet: new Set(), laki: 0, perempuan: 0 });
+    }
+  }
+
+  const ageCounts = [
+    { range: '0 - 4 Thn (Balita)', count: 0, color: '#10b981', desc: 'Prioritas e-Posyandu & Pencegahan Stunting' },
+    { range: '5 - 14 Thn (Anak/Pelajar)', count: 0, color: '#06b6d4', desc: 'Wajib Belajar Pendidikan Dasar' },
+    { range: '15 - 39 Thn (Pemuda/Produktif)', count: 0, color: '#3b82f6', desc: 'Tenaga Kerja & Wirausaha Muda' },
+    { range: '40 - 59 Thn (Pra-Lansia)', count: 0, color: '#f59e0b', desc: 'Penggerak Ekonomi & Rumah Tangga' },
+    { range: '≥ 60 Thn (Lansia)', count: 0, color: '#8b5cf6', desc: 'Layanan Posbindu & Jaminan Sosial' },
+    { range: 'Tidak Diketahui', count: 0, color: '#64748b', desc: 'Format tanggal lahir kosong atau tidak valid' }
+  ];
+
+  const homeAgeGroups = [
+    { name: '0-5', min: 0, max: 5, value: 0 },
+    { name: '6-12', min: 6, max: 12, value: 0 },
+    { name: '13-17', min: 13, max: 17, value: 0 },
+    { name: '18-25', min: 18, max: 25, value: 0 },
+    { name: '26-45', min: 26, max: 45, value: 0 },
+    { name: '46-60', min: 46, max: 60, value: 0 },
+    { name: '60+', min: 61, max: 200, value: 0 },
+    { name: 'Tidak Diketahui', min: -999, max: -1, value: 0 }
+  ];
+
+  const occMap: Record<string, number> = {};
+  const eduMap: Record<string, number> = {};
+
+  const today = new Date();
+  const calcAge = (rawDate: Date | string | null | undefined): number | null => {
+    if (!rawDate) return null;
+    const b = rawDate instanceof Date ? rawDate : new Date(rawDate);
+    if (isNaN(b.getTime()) || b > today) return null;
+    let age = today.getFullYear() - b.getFullYear();
+    const m = today.getMonth() - b.getMonth();
+    if (m < 0 || (m === 0 && today.getDate() < b.getDate())) age--;
+    if (age < 0 || age > 130) return null;
+    return age;
+  };
+
+  for (const r of residents) {
+    const kk = typeof r.kkNumber === 'string' ? r.kkNumber.trim() : '';
+    if (kk) kkSet.add(kk);
+
+    const genderNorm = (r.gender || '').trim().toLowerCase();
+    const isMale = genderNorm === 'laki-laki' || genderNorm === 'l' || genderNorm === 'male';
+    const isFemale = genderNorm === 'perempuan' || genderNorm === 'p' || genderNorm === 'female';
+    if (isMale) maleCount++;
+    else if (isFemale) femaleCount++;
+
+    const rawDusun =
+      typeof r.dusun === 'object' && r.dusun !== null
+        ? r.dusun.name
+        : typeof r.dusun === 'string'
+        ? r.dusun
+        : '';
+    const dName = (rawDusun || '').trim() || 'Lainnya';
+    if (!dusunMap.has(dName)) {
+      dusunMap.set(dName, { total: 0, kkSet: new Set(), laki: 0, perempuan: 0 });
+    }
+    const dStat = dusunMap.get(dName)!;
+    dStat.total += 1;
+    if (kk) dStat.kkSet.add(kk);
+    if (isMale) dStat.laki += 1;
+    else if (isFemale) dStat.perempuan += 1;
+
+    const age = calcAge(r.birthDate);
+    if (age === null) {
+      ageCounts[5].count++;
+      homeAgeGroups[7].value++;
+    } else {
+      if (age <= 4) ageCounts[0].count++;
+      else if (age <= 14) ageCounts[1].count++;
+      else if (age <= 39) ageCounts[2].count++;
+      else if (age <= 59) ageCounts[3].count++;
+      else ageCounts[4].count++;
+
+      const hg = homeAgeGroups.find((g) => age >= g.min && age <= g.max);
+      if (hg) hg.value++;
+    }
+
+    const occ = (r.occupation || '').trim() || 'Lainnya';
+    occMap[occ] = (occMap[occ] || 0) + 1;
+
+    const edu = (r.education || '').trim() || 'Tidak/Belum Sekolah';
+    eduMap[edu] = (eduMap[edu] || 0) + 1;
+  }
+
+  const dusunData = Array.from(dusunMap.entries())
+    .filter(([name, stat]) => name !== 'Lainnya' || stat.total > 0)
+    .map(([name, stat]) => ({
+      name,
+      total: stat.total,
+      kk: stat.kkSet.size || (stat.total > 0 ? Math.max(1, Math.round(stat.total / 3.6)) : 0),
+      laki: stat.laki,
+      perempuan: stat.perempuan
+    }));
+
+  const ageGroupData = ageCounts
+    .filter((c, idx) => idx < 5 || c.count > 0)
+    .map((c) => ({
+      range: c.range,
+      jumlah: c.count,
+      persentase: parseFloat(((c.count / totalPopulation) * 100).toFixed(1)),
+      color: c.color,
+      desc: c.desc
+    }));
+
+  const homeAgeData = homeAgeGroups
+    .filter((g) => g.name !== 'Tidak Diketahui' || g.value > 0)
+    .map(({ name, value }) => ({ name, value }));
+
+  const occColors = ['#059669', '#0284c7', '#d97706', '#7c3aed', '#db2777', '#64748b', '#10b981'];
+  const occupationData = Object.entries(occMap)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([name, val], idx) => ({
+      name,
+      value: val,
+      pct: `${((val / totalPopulation) * 100).toFixed(1)}%`,
+      color: occColors[idx % occColors.length]
+    }));
+
+  const eduColors = ['#94a3b8', '#38bdf8', '#3b82f6', '#10b981', '#8b5cf6', '#f59e0b'];
+  const educationData = Object.entries(eduMap)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([level, total], idx) => ({
+      level,
+      total,
+      color: eduColors[idx % eduColors.length]
+    }));
+
+  return {
+    hasMasterData: true,
+    totalPopulation,
+    totalFamilies: kkSet.size || Math.max(1, Math.round(totalPopulation / 3.6)),
+    maleCount,
+    femaleCount,
+    dusunData,
+    ageGroupData,
+    homeAgeData,
+    occupationData,
+    educationData
+  };
+}
+
+async function getPublicDemographicsPayload() {
+  try {
+    if (!(await isDatabaseAvailableCached())) {
+      if (allowJsonFallback()) {
+        const db = getDb();
+        const rawResidents = Array.isArray(db.residents) ? db.residents : [];
+        const active = rawResidents.filter(
+          (r: any) => !r.status || String(r.status).toUpperCase() === 'HIDUP'
+        );
+        const dusunNames = Array.isArray(db.territories)
+          ? db.territories.map((t: any) => t.name).filter(Boolean)
+          : [];
+        return computePublicDemographics(active, dusunNames);
+      }
+      return buildEmptyDemographics();
+    }
+
+    const p = getPrisma();
+    const [dusuns, residents] = await Promise.all([
+      p.dusun
+        .findMany({
+          where: { isActive: true },
+          orderBy: { number: 'asc' },
+          select: { name: true }
+        })
+        .catch(() => []),
+      p.resident
+        .findMany({
+          where: { status: 'HIDUP', isActive: true },
+          select: {
+            gender: true,
+            birthDate: true,
+            education: true,
+            occupation: true,
+            kkNumber: true,
+            dusun: { select: { name: true } }
+          }
+        })
+        .catch(() => [])
+    ]);
+
+    return computePublicDemographics(
+      residents,
+      dusuns.map((d: any) => d.name).filter(Boolean)
+    );
+  } catch (error: any) {
+    console.warn('⚠️ [PUBLIC-DEMOGRAPHICS-ERROR]:', sanitizeDiagnosticMessage(error?.message || String(error)));
+    return buildEmptyDemographics();
+  }
+}
+
 // 1. All public data bundle for efficient bootstrapping
 router.get('/bootstrap', async (req: Request, res: ExpressResponse) => {
   try {
     const dbAvailable = await isDatabaseAvailableCached();
     if (!dbAvailable) {
       if (allowJsonFallback()) {
-        const db = getDb();
+        const db = getDb() as any;
+        const fallbackBudgetHistory =
+          Array.isArray(db.budgetHistory) && db.budgetHistory.length > 0
+            ? db.budgetHistory
+            : db.budget
+            ? [db.budget]
+            : [];
+        const demographics = await getPublicDemographicsPayload();
+        const fallbackPublicComplaints = (db.complaints || [])
+          .filter((c: any) => c.isPublic === true)
+          .slice(0, 30)
+          .map((c: any) => ({
+            id: c.id,
+            ticketNumber: c.ticketNumber,
+            category: c.category,
+            title: c.title,
+            content: c.content,
+            reporterName: c.isAnonymous ? 'Warga Anonim' : c.reporterName,
+            location: c.location,
+            status: c.status,
+            adminResponse: c.adminResponse,
+            respondedBy: c.respondedBy,
+            isPublic: true,
+            fotoBuktiPenyelesaian: c.fotoBuktiPenyelesaian || null,
+            catatanTindakLanjut: c.catatanTindakLanjut || null,
+            date: c.createdAt || c.date,
+            createdAt: c.createdAt || c.date,
+            updatedAt: c.updatedAt || c.createdAt || c.date
+          }));
         return res.json({
           success: true,
           degraded: true,
           data: {
             profile: db.villageProfile || null,
             services: (db.services || []).filter((s: any) => s.isActive !== false),
-            news: (db.news || []).filter((n: any) => n.isPublished !== false).slice(0, 6),
-            announcements: (db.announcements || []).filter((a: any) => a.isActive !== false).slice(0, 5),
-            agendas: (db.agendas || []).slice(0, 5),
-            projects: (db.developmentProjects || []).slice(0, 5),
-            budget: db.budget || null,
+            news: (db.news || []).filter((n: any) => n.isPublished !== false),
+            announcements: (db.announcements || []).filter((a: any) => a.isActive !== false),
+            agendas: db.agendas || [],
+            projects: db.developmentProjects || [],
+            budget: db.budget || fallbackBudgetHistory[0] || null,
+            budgetHistory: fallbackBudgetHistory,
             officials: (db.officials || []).filter((o: any) => o.isActive !== false),
-            potentials: (db.potentials || []).slice(0, 4),
-            umkm: (db.umkm || []).filter((u: any) => u.isVerified !== false).slice(0, 4),
-            facilities: (db.facilities || []).slice(0, 6),
-            gallery: (db.gallery || []).slice(0, 6),
-            territories: db.territories || []
+            potentials: db.potentials || [],
+            umkm: (db.umkm || []).filter((u: any) => u.isVerified !== false),
+            facilities: db.facilities || [],
+            gallery: db.gallery || [],
+            territories: db.territories || [],
+            publicComplaints: fallbackPublicComplaints,
+            posyanduSchedules: db.posyanduSchedules || [],
+            demographics
           }
         });
       }
@@ -144,12 +422,16 @@ router.get('/bootstrap', async (req: Request, res: ExpressResponse) => {
           agendas: [],
           projects: [],
           budget: null,
+          budgetHistory: [],
           officials: [],
           potentials: [],
           umkm: [],
           facilities: [],
           gallery: [],
-          territories: []
+          territories: [],
+          publicComplaints: [],
+          posyanduSchedules: [],
+          demographics: buildEmptyDemographics()
         }
       });
     }
@@ -165,36 +447,62 @@ router.get('/bootstrap', async (req: Request, res: ExpressResponse) => {
       announcements,
       agendas,
       projects,
-      budget,
+      budgetHistory,
       officials,
       potentials,
       umkm,
       facilities,
       gallery,
-      territories
+      territories,
+      publicComplaintsRaw,
+      posyanduSchedules,
+      demographics
     ] = await Promise.all([
       getVillageProfile().catch(() => null),
       p.villageService.findMany({ where: { isActive: true }, orderBy: { category: 'asc' } }).catch(() => []),
       p.newsItem.findMany({ 
         where: { isPublished: true }, 
-        take: 6, 
+        take: 50, 
         orderBy: { publishedAt: 'desc' },
-        select: { id: true, title: true, slug: true, coverImage: true, publishedAt: true, category: true, summary: true }
+        select: {
+          id: true,
+          title: true,
+          slug: true,
+          coverImage: true,
+          publishedAt: true,
+          category: true,
+          summary: true,
+          content: true,
+          author: true,
+          views: true,
+          isPublished: true,
+          gallery: true
+        }
       }).catch(() => []),
       p.announcement.findMany({ 
         where: { isActive: true }, 
-        take: 5, 
+        take: 30, 
         orderBy: { publishedAt: 'desc' },
-        select: { id: true, title: true, priority: true, publishedAt: true }
+        select: {
+          id: true,
+          title: true,
+          content: true,
+          priority: true,
+          publishedAt: true,
+          validUntil: true,
+          isActive: true,
+          attachmentName: true,
+          attachmentUrl: true
+        }
       }).catch(() => []),
-      p.agendaItem.findMany({ take: 5, orderBy: { date: 'desc' } }).catch(() => []),
-      p.developmentProject.findMany({ take: 5, orderBy: { fiscalYear: 'desc' } }).catch(() => []),
-      p.budgetYearData.findFirst({ orderBy: { year: 'desc' } }).catch(() => null),
+      p.agendaItem.findMany({ take: 50, orderBy: { date: 'desc' } }).catch(() => []),
+      p.developmentProject.findMany({ take: 50, orderBy: { fiscalYear: 'desc' } }).catch(() => []),
+      p.budgetYearData.findMany({ orderBy: { year: 'desc' } }).catch(() => []),
       p.villageOfficial.findMany({ where: { isActive: true }, orderBy: { displayOrder: 'asc' } }).catch(() => []),
-      p.villagePotential.findMany({ take: 4 }).catch(() => []),
-      p.umkmItem.findMany({ where: { isVerified: true }, take: 4 }).catch(() => []),
-      p.mapFacility.findMany({ take: 6 }).catch(() => []),
-      p.galleryItem.findMany({ take: 6, orderBy: { date: 'desc' } }).catch(() => []),
+      p.villagePotential.findMany({ take: 50 }).catch(() => []),
+      p.umkmItem.findMany({ where: { isVerified: true }, take: 50 }).catch(() => []),
+      p.mapFacility.findMany({ take: 100 }).catch(() => []),
+      p.galleryItem.findMany({ take: 50, orderBy: { date: 'desc' } }).catch(() => []),
       p.dusun.findMany({
         where: { isActive: true },
         include: { 
@@ -206,8 +514,39 @@ router.get('/bootstrap', async (req: Request, res: ExpressResponse) => {
           } 
         },
         orderBy: { number: 'asc' }
-      }).catch(() => [])
+      }).catch(() => []),
+      p.complaint.findMany({
+        where: { isPublic: true },
+        orderBy: { createdAt: 'desc' },
+        take: 30
+      }).catch(() => []),
+      p.posyanduSchedule.findMany({
+        orderBy: { scheduleDate: 'asc' },
+        take: 30
+      }).catch(() => []),
+      getPublicDemographicsPayload()
     ]);
+
+    const publicComplaints = (Array.isArray(publicComplaintsRaw) ? publicComplaintsRaw : []).map((c: any) => ({
+      id: c.id,
+      ticketNumber: c.ticketNumber,
+      category: c.category,
+      title: c.title,
+      content: c.content,
+      reporterName: c.isAnonymous ? 'Warga Anonim' : c.reporterName,
+      location: c.location,
+      status: c.status,
+      adminResponse: c.adminResponse,
+      respondedBy: c.respondedBy,
+      isPublic: true,
+      fotoBuktiPenyelesaian: c.fotoBuktiPenyelesaian || null,
+      catatanTindakLanjut: c.catatanTindakLanjut || null,
+      date: c.createdAt,
+      createdAt: c.createdAt,
+      updatedAt: c.updatedAt
+    }));
+
+    const budget = Array.isArray(budgetHistory) && budgetHistory.length > 0 ? budgetHistory[0] : null;
 
     return res.json({
       success: true,
@@ -219,12 +558,16 @@ router.get('/bootstrap', async (req: Request, res: ExpressResponse) => {
         agendas,
         projects,
         budget,
+        budgetHistory,
         officials,
         potentials,
         umkm,
         facilities,
         gallery,
-        territories
+        territories,
+        publicComplaints,
+        posyanduSchedules,
+        demographics
       }
     });
   } catch (error: any) {
@@ -233,6 +576,37 @@ router.get('/bootstrap', async (req: Request, res: ExpressResponse) => {
       success: false, 
       error: 'Layanan data desa sedang sibuk. Silakan segarkan halaman dalam beberapa saat.' 
     });
+  }
+});
+
+// 1b. Public Aggregate Demographics (UU PDP Compliant - Zero PII)
+router.get('/demographics', async (_req: Request, res: ExpressResponse) => {
+  const data = await getPublicDemographicsPayload();
+  return res.json({ success: true, data });
+});
+
+// 1c. Public APBDes Multi-Year History
+router.get('/budgets', async (_req: Request, res: ExpressResponse) => {
+  try {
+    if (!(await isDatabaseAvailableCached())) {
+      const fallback = allowJsonFallback() ? getDb() : null;
+      const history = fallback
+        ? (Array.isArray(fallback.budgetHistory) && fallback.budgetHistory.length > 0
+            ? fallback.budgetHistory
+            : fallback.budget
+            ? [fallback.budget]
+            : [])
+        : [];
+      return res.json({ success: true, degraded: true, data: history });
+    }
+
+    const budgets = await getPrisma().budgetYearData.findMany({
+      orderBy: { year: 'desc' }
+    });
+    return res.json({ success: true, data: budgets });
+  } catch (error: any) {
+    console.warn('⚠️ [PUBLIC-BUDGETS-ERROR]:', sanitizeDiagnosticMessage(error?.message || String(error)));
+    return res.status(500).json({ success: false, error: 'Gagal memuat daftar APBDes publik.' });
   }
 });
 
@@ -668,14 +1042,48 @@ router.post('/complaints', async (req: Request, res: ExpressResponse) => {
 // 7. Track Complaint by Ticket
 router.get('/complaints/track/:ticket', async (req: Request, res: ExpressResponse) => {
   try {
+    const ticket = req.params.ticket.trim().toUpperCase();
+
     if (!(await isDatabaseAvailableCached())) {
+      if (allowJsonFallback()) {
+        const found = (getDb().complaints || []).find(
+          (c: any) => String(c.ticketNumber || '').toUpperCase() === ticket
+        );
+        if (!found) {
+          return res.status(404).json({
+            success: false,
+            error: `Nomor tiket aduan '${ticket}' tidak ditemukan.`
+          });
+        }
+        return res.json({
+          success: true,
+          degraded: true,
+          data: {
+            id: found.id,
+            ticketNumber: found.ticketNumber,
+            category: found.category,
+            title: found.title,
+            content: found.content,
+            reporterName: found.isAnonymous ? 'Warga Anonim' : found.reporterName,
+            location: found.location,
+            status: found.status,
+            adminResponse: found.adminResponse,
+            respondedBy: found.respondedBy,
+            isPublic: Boolean(found.isPublic),
+            fotoBuktiPenyelesaian: found.fotoBuktiPenyelesaian || null,
+            catatanTindakLanjut: found.catatanTindakLanjut || null,
+            date: found.createdAt || found.date,
+            createdAt: found.createdAt || found.date,
+            updatedAt: found.updatedAt || found.createdAt || found.date
+          }
+        });
+      }
       return res.status(503).json({
         success: false,
         error: 'Koneksi database belum tersedia untuk pelacakan pengaduan.'
       });
     }
 
-    const ticket = req.params.ticket.trim().toUpperCase();
     const prisma = getPrisma();
 
     const found = await prisma.complaint.findFirst({
@@ -692,6 +1100,7 @@ router.get('/complaints/track/:ticket', async (req: Request, res: ExpressRespons
     return res.json({
       success: true,
       data: {
+        id: found.id,
         ticketNumber: found.ticketNumber,
         category: found.category,
         title: found.title,
@@ -701,7 +1110,12 @@ router.get('/complaints/track/:ticket', async (req: Request, res: ExpressRespons
         status: found.status,
         adminResponse: found.adminResponse,
         respondedBy: found.respondedBy,
-        date: found.createdAt
+        isPublic: Boolean(found.isPublic),
+        fotoBuktiPenyelesaian: found.fotoBuktiPenyelesaian || null,
+        catatanTindakLanjut: found.catatanTindakLanjut || null,
+        date: found.createdAt,
+        createdAt: found.createdAt,
+        updatedAt: found.updatedAt
       }
     });
   } catch (error: any) {
@@ -715,7 +1129,24 @@ router.get('/complaints/public', async (req: Request, res: ExpressResponse) => {
   try {
     if (!(await isDatabaseAvailableCached())) {
       const list = allowJsonFallback()
-        ? (getDb().complaints || []).filter((c: any) => c.isPublic).slice(0, 20)
+        ? (getDb().complaints || []).filter((c: any) => c.isPublic).slice(0, 30).map((c: any) => ({
+            id: c.id,
+            ticketNumber: c.ticketNumber,
+            category: c.category,
+            title: c.title,
+            content: c.content,
+            reporterName: c.isAnonymous ? 'Warga Anonim' : c.reporterName,
+            location: c.location,
+            status: c.status,
+            adminResponse: c.adminResponse,
+            respondedBy: c.respondedBy,
+            isPublic: true,
+            fotoBuktiPenyelesaian: c.fotoBuktiPenyelesaian || null,
+            catatanTindakLanjut: c.catatanTindakLanjut || null,
+            date: c.createdAt || c.date,
+            createdAt: c.createdAt || c.date,
+            updatedAt: c.updatedAt || c.createdAt || c.date
+          }))
         : [];
       return res.json({ success: true, data: list, degraded: true });
     }
@@ -723,10 +1154,11 @@ router.get('/complaints/public', async (req: Request, res: ExpressResponse) => {
     const list = await prisma.complaint.findMany({
       where: { isPublic: true },
       orderBy: { createdAt: 'desc' },
-      take: 20
+      take: 30
     });
 
     const sanitizedList = list.map((c: any) => ({
+      id: c.id,
       ticketNumber: c.ticketNumber,
       category: c.category,
       title: c.title,
@@ -736,7 +1168,12 @@ router.get('/complaints/public', async (req: Request, res: ExpressResponse) => {
       status: c.status,
       adminResponse: c.adminResponse,
       respondedBy: c.respondedBy,
-      date: c.createdAt
+      isPublic: true,
+      fotoBuktiPenyelesaian: c.fotoBuktiPenyelesaian || null,
+      catatanTindakLanjut: c.catatanTindakLanjut || null,
+      date: c.createdAt,
+      createdAt: c.createdAt,
+      updatedAt: c.updatedAt
     }));
     
     return res.json({ success: true, data: sanitizedList });
@@ -941,6 +1378,193 @@ router.get('/kpm', async (req: Request, res: ExpressResponse) => {
   } catch (error: any) {
     console.warn('⚠️ [PUBLIC-KPM-DEGRADED]:', sanitizeDiagnosticMessage(error?.message || String(error)));
     return res.json({ success: true, data: [], degraded: true });
+  }
+});
+
+// 15b. Public e-Posyandu Summary (UU PDP Compliant - Aggregate Stats + Schedules Only, Zero Child PII)
+router.get('/posyandu/summary', async (_req: Request, res: ExpressResponse) => {
+  const buildPosyanduSummary = (toddlers: any[], schedules: any[]) => {
+    const now = new Date();
+    const active = toddlers.filter((t: any) => {
+      if (!t?.birthDate) return true;
+      const b = new Date(t.birthDate);
+      if (isNaN(b.getTime())) return true;
+      const months = (now.getFullYear() - b.getFullYear()) * 12 + (now.getMonth() - b.getMonth());
+      return months >= 0 && months <= 60;
+    });
+
+    let normalCount = 0;
+    let riskCount = 0;
+    let immCount = 0;
+    let vitACount = 0;
+    const dusunMap = new Map<string, { dusunName: string; count: number; normalCount: number; riskCount: number }>();
+
+    for (const t of active) {
+      const dusun = String(t.dusunName || 'Dusun Utama').trim() || 'Dusun Utama';
+      const entry = dusunMap.get(dusun) || { dusunName: dusun, count: 0, normalCount: 0, riskCount: 0 };
+      entry.count += 1;
+
+      const measurements = Array.isArray(t.measurements) ? [...t.measurements] : [];
+      measurements.sort((a: any, b: any) => new Date(a.measurementDate).getTime() - new Date(b.measurementDate).getTime());
+      const latest = measurements.length > 0 ? measurements[measurements.length - 1] : null;
+      const overall = String(latest?.overallStatus || '');
+      const isNormal = overall ? overall.includes('Normal') : !t.isInterventionTarget;
+      const isRisk = t.isInterventionTarget || (overall ? overall.includes('Stunting') || overall.includes('Gizi Kurang') || overall.includes('Pendek') : false);
+
+      if (isNormal) {
+        normalCount += 1;
+        entry.normalCount += 1;
+      }
+      if (isRisk) {
+        riskCount += 1;
+        entry.riskCount += 1;
+      }
+      if (latest?.immunizationStatus && String(latest.immunizationStatus).toLowerCase() !== 'belum') {
+        immCount += 1;
+      }
+      if (latest?.vitA) {
+        vitACount += 1;
+      }
+      dusunMap.set(dusun, entry);
+    }
+
+    const total = active.length;
+    return {
+      stats: {
+        total,
+        normalCount,
+        normalPct: total > 0 ? Math.round((normalCount / total) * 100) : 0,
+        riskCount,
+        immunizationPct: total > 0 ? Math.round((immCount / total) * 100) : 0,
+        vitAPct: total > 0 ? Math.round((vitACount / total) * 100) : 0
+      },
+      dusunBreakdown: Array.from(dusunMap.values()).sort((a, b) => a.dusunName.localeCompare(b.dusunName)),
+      schedules
+    };
+  };
+
+  try {
+    if (!(await isDatabaseAvailableCached())) {
+      const db = allowJsonFallback() ? (getDb() as any) : null;
+      const toddlers = db?.toddlers || [];
+      const schedules = db?.posyanduSchedules || [];
+      return res.json({ success: true, degraded: true, data: buildPosyanduSummary(toddlers, schedules) });
+    }
+
+    const prisma = getPrisma();
+    const [toddlers, schedules] = await Promise.all([
+      prisma.toddlerRecord.findMany({
+        select: {
+          id: true,
+          birthDate: true,
+          dusunName: true,
+          isInterventionTarget: true,
+          measurements: {
+            orderBy: { measurementDate: 'desc' },
+            take: 1,
+            select: {
+              measurementDate: true,
+              overallStatus: true,
+              immunizationStatus: true,
+              vitA: true
+            }
+          }
+        }
+      }).catch(() => []),
+      prisma.posyanduSchedule.findMany({
+        orderBy: { scheduleDate: 'asc' }
+      }).catch(() => [])
+    ]);
+
+    return res.json({ success: true, data: buildPosyanduSummary(toddlers, schedules) });
+  } catch (error: any) {
+    console.warn('⚠️ [PUBLIC-POSYANDU-SUMMARY-ERROR]:', sanitizeDiagnosticMessage(error?.message || String(error)));
+    return res.json({
+      success: true,
+      degraded: true,
+      data: {
+        stats: { total: 0, normalCount: 0, normalPct: 0, riskCount: 0, immunizationPct: 0, vitAPct: 0 },
+        dusunBreakdown: [],
+        schedules: []
+      }
+    });
+  }
+});
+
+// 15c. Public KMS Digital Exact Lookup (Strict NIK or KMS Card Number only)
+router.get('/posyandu/kms', async (req: Request, res: ExpressResponse) => {
+  try {
+    const cleanQ = String(req.query.q || '').trim();
+    if (cleanQ.length < 6) {
+      return res.status(400).json({
+        success: false,
+        error: 'Masukkan NIK Anak (16 digit) atau Nomor Kartu KMS/KIA yang valid (minimal 6 karakter).'
+      });
+    }
+
+    const sanitizeToddlerForParent = (t: any) => ({
+      id: t.id,
+      name: t.name,
+      nik: t.nik,
+      gender: t.gender,
+      birthDate: t.birthDate,
+      birthWeightKg: t.birthWeightKg,
+      birthHeightCm: t.birthHeightCm,
+      parentName: t.parentName,
+      dusunName: t.dusunName,
+      rtRw: t.rtRw,
+      address: t.address,
+      kmsCardNumber: t.kmsCardNumber,
+      isInterventionTarget: Boolean(t.isInterventionTarget),
+      measurements: Array.isArray(t.measurements) ? t.measurements : []
+    });
+
+    if (!(await isDatabaseAvailableCached())) {
+      if (allowJsonFallback()) {
+        const found = ((getDb() as any).toddlers || []).find(
+          (t: any) =>
+            String(t.nik || '').trim() === cleanQ ||
+            String(t.kmsCardNumber || '').trim().toLowerCase() === cleanQ.toLowerCase()
+        );
+        if (!found) {
+          return res.status(404).json({
+            success: false,
+            error: `Data anak dengan NIK atau Nomor KMS "${cleanQ}" tidak ditemukan.`
+          });
+        }
+        return res.json({ success: true, degraded: true, data: sanitizeToddlerForParent(found) });
+      }
+      return res.status(503).json({
+        success: false,
+        error: 'Layanan KMS Digital sedang tidak tersedia saat koneksi database terputus.'
+      });
+    }
+
+    const found = await getPrisma().toddlerRecord.findFirst({
+      where: {
+        OR: [
+          { nik: cleanQ },
+          { kmsCardNumber: { equals: cleanQ, mode: 'insensitive' } }
+        ]
+      },
+      include: {
+        measurements: {
+          orderBy: { measurementDate: 'asc' }
+        }
+      }
+    });
+
+    if (!found) {
+      return res.status(404).json({
+        success: false,
+        error: `Data anak dengan NIK atau Nomor KMS "${cleanQ}" tidak ditemukan.`
+      });
+    }
+
+    return res.json({ success: true, data: sanitizeToddlerForParent(found) });
+  } catch (error: any) {
+    console.warn('⚠️ [PUBLIC-POSYANDU-KMS-ERROR]:', sanitizeDiagnosticMessage(error?.message || String(error)));
+    return res.status(500).json({ success: false, error: 'Gagal memeriksa data KMS Digital.' });
   }
 });
 

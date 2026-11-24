@@ -17,6 +17,7 @@ import { getLetterFormatConfig, LetterClass } from '../../data/letterClassificat
 import { useApp } from '../../context/AppContext';
 import { SadewaHouseLogo } from '../common/SadewaHouseLogo';
 import { getUnmaskedOfficialNik } from './sanitizer';
+import defaultVillageEmblem from '../../assets/images/village_emblem_logo_1789232883035.jpg';
 
 export interface LetterPreviewContainerProps {
   request: ServiceRequest;
@@ -57,7 +58,7 @@ export const LetterPreviewContainer: React.FC<LetterPreviewContainerProps> = ({
   villageProfile,
   kadesName,
   kadesNip,
-  officialSignatureUrl = '/images/sample-signature.png',
+  officialSignatureUrl = '',
   printDate,
   qrCodeDataUrl,
   onPrint,
@@ -312,7 +313,7 @@ export const LetterPreviewContainer: React.FC<LetterPreviewContainerProps> = ({
           <div className="flex items-center justify-between gap-4 pb-1">
             <div className="w-20 h-24 flex items-center justify-center shrink-0">
               <img
-                src={villageProfile?.villageLogoUrl || "/images/logo-batanghari.png"}
+                src={villageProfile?.villageLogoUrl?.trim() || defaultVillageEmblem}
                 alt="Lambang Daerah"
                 className="max-h-20 max-w-full object-contain"
                 onError={(e) => {
@@ -338,7 +339,7 @@ export const LetterPreviewContainer: React.FC<LetterPreviewContainerProps> = ({
             </div>
             <div className="w-20 h-24 hidden sm:flex items-center justify-center shrink-0">
               <img
-                src="/images/logo.png"
+                src={villageProfile?.sadewaLogoUrl?.trim() || '/favicon.svg'}
                 alt="Logo SADEWA"
                 className="max-h-16 max-w-full object-contain opacity-40"
                 onError={(e) => {

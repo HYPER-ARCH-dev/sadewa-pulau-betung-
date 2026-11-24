@@ -34,7 +34,7 @@ import {
 
 import { SadewaHouseLogo, SadewaFullLogo } from './SadewaHouseLogo';
 import { PWAInstallButton } from './PWAInstallButton';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 
 interface HeaderProps {
   onOpenLogin?: () => void;
@@ -274,7 +274,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLogin, onOpenAdminModal, o
                 <ChevronDown className="w-3.5 h-3.5 opacity-40 group-hover:rotate-180 transition-transform duration-300" />
               </button>
 
-              <div className="absolute left-0 mt-2 w-64 rounded-2xl bg-white dark:bg-slate-900 shadow-[0_20px_50px_rgba(0,0,0,0.1)] dark:shadow-[0_20px_50px_rgba(0,0,0,0.3)] border border-slate-200/60 dark:border-slate-800/60 p-2 hidden group-hover:block transition-all z-50 text-slate-800 dark:text-slate-200 normal-case backdrop-blur-xl bg-white/90 dark:bg-slate-900/90">
+              <div className="absolute left-0 mt-2 w-64 rounded-2xl bg-white/95 dark:bg-slate-900/95 shadow-[0_20px_50px_rgba(0,0,0,0.12)] dark:shadow-[0_20px_50px_rgba(0,0,0,0.35)] border border-slate-200/70 dark:border-slate-800/70 p-2 opacity-0 invisible translate-y-1.5 scale-[0.98] pointer-events-none group-hover:opacity-100 group-hover:visible group-hover:translate-y-0 group-hover:scale-100 group-hover:pointer-events-auto transition-all duration-200 ease-out origin-top-left z-50 text-slate-800 dark:text-slate-200 normal-case backdrop-blur-xl">
                 <button
                   onClick={() => handleNav('profil')}
                   className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-emerald-50 dark:hover:bg-emerald-900/20 hover:text-emerald-800 dark:hover:text-emerald-400 flex items-center space-x-3 transition-colors"
@@ -327,7 +327,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLogin, onOpenAdminModal, o
                 <span>Layanan</span>
                 <ChevronDown className="w-3.5 h-3.5 opacity-40 group-hover:rotate-180 transition-transform duration-300" />
               </button>
-              <div className="absolute left-0 mt-2 w-64 rounded-2xl bg-white dark:bg-slate-900 shadow-[0_20px_50px_rgba(0,0,0,0.1)] dark:shadow-[0_20px_50px_rgba(0,0,0,0.3)] border border-slate-200/60 dark:border-slate-800/60 p-2 hidden group-hover:block transition-all z-50 text-slate-800 dark:text-slate-200 normal-case backdrop-blur-xl bg-white/90 dark:bg-slate-900/90">
+              <div className="absolute left-0 mt-2 w-64 rounded-2xl bg-white/95 dark:bg-slate-900/95 shadow-[0_20px_50px_rgba(0,0,0,0.12)] dark:shadow-[0_20px_50px_rgba(0,0,0,0.35)] border border-slate-200/70 dark:border-slate-800/70 p-2 opacity-0 invisible translate-y-1.5 scale-[0.98] pointer-events-none group-hover:opacity-100 group-hover:visible group-hover:translate-y-0 group-hover:scale-100 group-hover:pointer-events-auto transition-all duration-200 ease-out origin-top-left z-50 text-slate-800 dark:text-slate-200 normal-case backdrop-blur-xl">
                 <button
                   onClick={() => handleNav('layanan')}
                   className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-emerald-50 dark:hover:bg-emerald-900/20 hover:text-emerald-800 dark:hover:text-emerald-400 flex items-center space-x-3 transition-colors"
@@ -383,7 +383,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLogin, onOpenAdminModal, o
                 <span>Transparansi</span>
                 <ChevronDown className="w-3.5 h-3.5 opacity-40 group-hover:rotate-180 transition-transform duration-300" />
               </button>
-              <div className="absolute left-0 mt-2 w-64 rounded-2xl bg-white dark:bg-slate-900 shadow-[0_20px_50px_rgba(0,0,0,0.1)] dark:shadow-[0_20px_50px_rgba(0,0,0,0.3)] border border-slate-200/60 dark:border-slate-800/60 p-2 hidden group-hover:block transition-all z-50 text-slate-800 dark:text-slate-200 normal-case backdrop-blur-xl bg-white/90 dark:bg-slate-900/90">
+              <div className="absolute left-0 mt-2 w-64 rounded-2xl bg-white/95 dark:bg-slate-900/95 shadow-[0_20px_50px_rgba(0,0,0,0.12)] dark:shadow-[0_20px_50px_rgba(0,0,0,0.35)] border border-slate-200/70 dark:border-slate-800/70 p-2 opacity-0 invisible translate-y-1.5 scale-[0.98] pointer-events-none group-hover:opacity-100 group-hover:visible group-hover:translate-y-0 group-hover:scale-100 group-hover:pointer-events-auto transition-all duration-200 ease-out origin-top-left z-50 text-slate-800 dark:text-slate-200 normal-case backdrop-blur-xl">
                 <button
                   onClick={() => handleNav('transparansi')}
                   className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-emerald-50 dark:hover:bg-emerald-900/20 hover:text-emerald-800 dark:hover:text-emerald-400 flex items-center space-x-3 transition-colors"
@@ -424,7 +424,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLogin, onOpenAdminModal, o
                 <span>Warta</span>
                 <ChevronDown className="w-3.5 h-3.5 opacity-40 group-hover:rotate-180 transition-transform duration-300" />
               </button>
-              <div className="absolute right-0 mt-2 w-56 rounded-2xl bg-white dark:bg-slate-900 shadow-[0_20px_50px_rgba(0,0,0,0.1)] dark:shadow-[0_20px_50px_rgba(0,0,0,0.3)] border border-slate-200/60 dark:border-slate-800/60 p-2 hidden group-hover:block transition-all z-50 text-slate-800 dark:text-slate-200 normal-case backdrop-blur-xl bg-white/90 dark:bg-slate-900/90">
+              <div className="absolute right-0 mt-2 w-56 rounded-2xl bg-white/95 dark:bg-slate-900/95 shadow-[0_20px_50px_rgba(0,0,0,0.12)] dark:shadow-[0_20px_50px_rgba(0,0,0,0.35)] border border-slate-200/70 dark:border-slate-800/70 p-2 opacity-0 invisible translate-y-1.5 scale-[0.98] pointer-events-none group-hover:opacity-100 group-hover:visible group-hover:translate-y-0 group-hover:scale-100 group-hover:pointer-events-auto transition-all duration-200 ease-out origin-top-right z-50 text-slate-800 dark:text-slate-200 normal-case backdrop-blur-xl">
                 <button onClick={() => handleNav('berita')} className="w-full text-left px-3 py-2 text-[11px] font-bold rounded-xl hover:bg-slate-50 dark:hover:bg-white/5 transition-colors">Warta Terkini</button>
                 <button onClick={() => handleNav('pengumuman')} className="w-full text-left px-3 py-2 text-[11px] font-bold rounded-xl hover:bg-slate-50 dark:hover:bg-white/5 transition-colors mt-0.5">Pengumuman Resmi</button>
                 <button onClick={() => handleNav('agenda')} className="w-full text-left px-3 py-2 text-[11px] font-bold rounded-xl hover:bg-slate-50 dark:hover:bg-white/5 transition-colors mt-0.5">Agenda Kegiatan</button>
@@ -527,8 +527,15 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLogin, onOpenAdminModal, o
       </div>
 
       {/* Mobile Drawer Navigation */}
-      {mobileMenuOpen && (
-        <div className="lg:hidden bg-white border-b-2 border-slate-200 shadow-xl px-4 pt-2 pb-6 space-y-1 max-h-[80vh] overflow-y-auto text-slate-800">
+      <AnimatePresence>
+        {mobileMenuOpen && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+            className="lg:hidden bg-white/95 backdrop-blur-xl border-b-2 border-slate-200 shadow-xl px-4 pt-2 pb-6 space-y-1 max-h-[80vh] overflow-y-auto text-slate-800"
+          >
           <div className="flex items-center justify-between p-3 mb-4 bg-slate-50 rounded-2xl border border-slate-100">
             <div className="flex items-center space-x-3">
               {villageProfile.sadewaIconUrl && villageProfile.sadewaIconUrl.trim() !== '' ? (
@@ -743,8 +750,9 @@ export const Header: React.FC<HeaderProps> = ({ onOpenLogin, onOpenAdminModal, o
           >
             Kontak & Jam Layanan Kantor
           </button>
-        </div>
+        </motion.div>
       )}
+      </AnimatePresence>
     </header>
   );
 };

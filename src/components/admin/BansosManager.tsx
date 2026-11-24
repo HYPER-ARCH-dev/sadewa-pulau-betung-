@@ -270,7 +270,7 @@ export const BansosManager: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="w-full min-w-0 space-y-6">
       {/* Top Header & Action */}
       <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-6 rounded-3xl border border-slate-200/90 shadow-sm">
         <div className="space-y-1">

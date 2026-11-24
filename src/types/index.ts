@@ -582,3 +582,40 @@ export type FacilityPoint = MapFacility & {
   coordinates?: [number, number];
 };
 
+export interface PublicDemographics {
+  hasMasterData: boolean;
+  totalPopulation: number;
+  totalFamilies: number;
+  maleCount: number;
+  femaleCount: number;
+  dusunData: {
+    name: string;
+    total: number;
+    kk: number;
+    laki: number;
+    perempuan: number;
+  }[];
+  ageGroupData: {
+    range: string;
+    jumlah: number;
+    persentase: number;
+    color: string;
+    desc: string;
+  }[];
+  homeAgeData: {
+    name: string;
+    value: number;
+  }[];
+  occupationData: {
+    name: string;
+    value: number;
+    pct: string;
+    color: string;
+  }[];
+  educationData: {
+    level: string;
+    total: number;
+    color: string;
+  }[];
+}
+

@@ -64,7 +64,14 @@ export const UserManager: React.FC = () => {
     { id: 'webgis', label: 'WebGIS & PBB/SPORADIK' },
     { id: 'posyandu', label: 'e-Posyandu & Stunting' },
     { id: 'apbdes', label: 'Transparansi APBDes & TPK' },
-    { id: 'news', label: 'Warta & Pengumuman Desa' },
+    { id: 'news', label: 'Warta & Berita' },
+    { id: 'announcements', label: 'Pengumuman & Agenda' },
+    { id: 'umkm', label: 'Katalog UMKM' },
+    { id: 'bansos', label: 'Bantuan Sosial & KPM' },
+    { id: 'potential', label: 'Manajemen Potensi Desa' },
+    { id: 'facilities', label: 'Fasilitas & Peta' },
+    { id: 'profile', label: 'Identitas & Profil' },
+    { id: 'residents', label: 'Buku Induk Penduduk' },
     { id: 'officials', label: 'Kelola Perangkat Desa' },
     { id: 'territories', label: 'Master Wilayah (RT/RW)' },
   ];
@@ -144,7 +151,7 @@ export const UserManager: React.FC = () => {
           roleTitle, 
           isActive,
           officialId,
-          permissions: role === 'operator' ? permissions : [] 
+          permissions: role !== 'super_admin' ? permissions : [] 
         });
         if (res.success) {
           addToast('success', 'Berhasil Diperbarui', `Akun ${username} telah diperbarui.`);
@@ -162,7 +169,7 @@ export const UserManager: React.FC = () => {
           role, 
           roleTitle,
           officialId,
-          permissions: role === 'operator' ? permissions : []
+          permissions: role !== 'super_admin' ? permissions : []
         });
         if (res.success) {
           addToast('success', 'Pengguna Ditambahkan', `Akun baru ${username} berhasil dibuat.`);

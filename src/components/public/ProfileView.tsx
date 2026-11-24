@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 
 export const ProfileView: React.FC = () => {
-  const { villageProfile, navigateTo } = useApp();
+  const { villageProfile, demographics, navigateTo } = useApp();
   const { residents } = useResidents();
 
   const defaultMissions = [
@@ -30,24 +30,34 @@ export const ProfileView: React.FC = () => {
     ? villageProfile.mission
     : defaultMissions;
 
-  // Jalur data dinamis dari Master Kependudukan SADEWA 360
-  const activeResidents = residents.filter(r => r.status === 'Hidup');
-  const hasMasterData = activeResidents.length > 0;
+  // Jalur data dinamis dari Master Kependudukan SADEWA 360 (Admin maupun Publik)
+  const activeResidents = residents.filter(r => (r.status || '').toLowerCase() === 'hidup');
+  const hasAdminMasterData = activeResidents.length > 0;
+  const hasPublicMasterData = !hasAdminMasterData && Boolean(demographics?.hasMasterData && demographics.totalPopulation > 0);
+  const hasMasterData = hasAdminMasterData || hasPublicMasterData;
 
-  const totalPop = hasMasterData 
-    ? activeResidents.length 
+  const totalPop = hasAdminMasterData
+    ? activeResidents.length
+    : hasPublicMasterData
+    ? demographics!.totalPopulation
     : (villageProfile.totalPopulation || 0);
 
-  const totalFam = hasMasterData 
-    ? new Set(activeResidents.map(r => r.kk)).size 
+  const totalFam = hasAdminMasterData
+    ? new Set(activeResidents.map(r => r.kk).filter(Boolean)).size
+    : hasPublicMasterData
+    ? demographics!.totalFamilies
     : (villageProfile.totalFamilies || 0);
 
-  const malePop = hasMasterData 
-    ? activeResidents.filter(r => r.gender === 'Laki-laki').length 
+  const malePop = hasAdminMasterData
+    ? activeResidents.filter(r => r.gender === 'Laki-laki').length
+    : hasPublicMasterData
+    ? demographics!.maleCount
     : (villageProfile.malePopulation ?? (totalPop > 0 ? Math.round(totalPop * 0.508) : 0));
 
-  const femalePop = hasMasterData 
-    ? activeResidents.filter(r => r.gender === 'Perempuan').length 
+  const femalePop = hasAdminMasterData
+    ? activeResidents.filter(r => r.gender === 'Perempuan').length
+    : hasPublicMasterData
+    ? demographics!.femaleCount
     : (villageProfile.femalePopulation ?? Math.max(0, totalPop - malePop));
 
   return (
@@ -200,7 +210,7 @@ export const ProfileView: React.FC = () => {
           </div>
           <p className="text-[11px] text-slate-400 italic text-center">
             {hasMasterData
-              ? `*Sumber: Sinkronisasi Pangkalan Data Master Kependudukan SADEWA 360 (${activeResidents.length.toLocaleString('id-ID')} jiwa terdaftar).`
+              ? `*Sumber: Sinkronisasi Pangkalan Data Master Kependudukan SADEWA 360 (${totalPop.toLocaleString('id-ID')} jiwa terdaftar).`
               : `*Sumber: Rekapitulasi Data Buku Administrasi Penduduk Kantor ${villageProfile.villageName || 'Desa'}.`}
           </p>
         </div>

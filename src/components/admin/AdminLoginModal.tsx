@@ -22,8 +22,6 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({ isOpen, onClos
   const [errorMsg, setErrorMsg] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  if (!isOpen) return null;
-
   const handleManualLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!usernameOrEmail.trim()) {
@@ -53,54 +51,82 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({ isOpen, onClos
   };
 
   return (
-    <div className="fixed inset-0 z-[100] overflow-y-auto p-4 flex items-center justify-center">
-      <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm transition-opacity" onClick={onClose} />
+    <AnimatePresence>
+      {isOpen && (
+        <div className="fixed inset-0 z-[100] overflow-y-auto p-4 flex items-center justify-center">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.22 }}
+            className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm"
+            onClick={onClose}
+          />
 
-      {/* LUXURY SLIDING MODAL CONTAINER */}
-      <div 
-        className="relative w-full max-w-[750px] md:h-[600px] bg-white rounded-[30px] shadow-2xl border border-slate-200 overflow-hidden z-10 flex flex-col md:flex-row"
-      >
-        <button
-          onClick={onClose}
-          className="absolute top-5 right-5 z-[60] text-slate-400 hover:text-slate-900 p-2 rounded-full hover:bg-slate-100 transition-all active:scale-95"
-        >
-          <X className="w-5 h-5" />
-        </button>
+          {/* LUXURY SLIDING MODAL CONTAINER */}
+          <motion.div
+            initial={{ opacity: 0, y: 16, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.96 }}
+            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+            className="relative w-full max-w-[750px] md:h-[600px] bg-white rounded-[30px] shadow-2xl border border-slate-200 overflow-hidden z-10 flex flex-col md:flex-row"
+          >
+            <motion.button
+              whileHover={{ scale: 1.08 }}
+              whileTap={{ scale: 0.92 }}
+              onClick={onClose}
+              className="absolute top-5 right-5 z-[60] text-slate-400 hover:text-slate-900 p-2 rounded-full hover:bg-slate-100 transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </motion.button>
 
-        {/* LEFT PANEL: LOGIN FORM */}
-        <div className={`w-full md:w-1/2 h-full bg-white flex items-center justify-center p-8 transition-all duration-[1s] ease-in-out order-2 md:order-1 ${
-          activeTab === 'attendance' ? 'opacity-0 invisible pointer-events-none' : 'opacity-100 visible'
-        }`}>
-          <div className="w-full max-h-full overflow-y-auto no-scrollbar space-y-6 py-4">
-            <div className="text-center space-y-4">
-              <div className="flex items-center justify-center gap-4 mb-4 animate-in fade-in zoom-in duration-700">
-                {villageProfile?.villageLogoUrl && (
-                  <img src={villageProfile.villageLogoUrl} alt="Logo Desa" className="h-16 w-auto object-contain drop-shadow-md" />
-                )}
-                <div className="h-10 w-px bg-slate-200"></div>
-                {villageProfile?.sadewaIconUrl || villageProfile?.sadewaLogoUrl ? (
-                  <img 
-                    src={villageProfile.sadewaIconUrl || villageProfile.sadewaLogoUrl} 
-                    alt="SADEWA" 
-                    className="h-16 w-auto object-contain drop-shadow-md" 
-                    referrerPolicy="no-referrer" 
-                  />
-                ) : (
-                  <div className="text-emerald-700 drop-shadow-sm">
-                    <SadewaHouseLogo size={48} />
-                  </div>
-                )}
-              </div>
-              <h2 className="text-2xl font-black text-slate-900 tracking-tight">Login Portal Admin</h2>
-              <p className="text-xs text-slate-500 font-medium">Akses dashboard pengelolaan data desa terpadu.</p>
-            </div>
+            {/* LEFT PANEL: LOGIN FORM */}
+            <div className={`w-full md:w-1/2 h-full bg-white flex items-center justify-center p-8 transition-all duration-[1s] ease-in-out order-2 md:order-1 ${
+              activeTab === 'attendance' ? 'opacity-0 invisible pointer-events-none' : 'opacity-100 visible'
+            }`}>
+              <div className="w-full max-h-full overflow-y-auto no-scrollbar space-y-6 py-4">
+                <div className="text-center space-y-4">
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.92 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ duration: 0.4 }}
+                    className="flex items-center justify-center gap-4 mb-4"
+                  >
+                    {villageProfile?.villageLogoUrl && (
+                      <img src={villageProfile.villageLogoUrl} alt="Logo Desa" className="h-16 w-auto object-contain drop-shadow-md" />
+                    )}
+                    <div className="h-10 w-px bg-slate-200"></div>
+                    {villageProfile?.sadewaIconUrl || villageProfile?.sadewaLogoUrl ? (
+                      <img 
+                        src={villageProfile.sadewaIconUrl || villageProfile.sadewaLogoUrl} 
+                        alt="SADEWA" 
+                        className="h-16 w-auto object-contain drop-shadow-md" 
+                        referrerPolicy="no-referrer" 
+                      />
+                    ) : (
+                      <div className="text-emerald-700 drop-shadow-sm">
+                        <SadewaHouseLogo size={48} />
+                      </div>
+                    )}
+                  </motion.div>
+                  <h2 className="text-2xl font-black text-slate-900 tracking-tight">Login Portal Admin</h2>
+                  <p className="text-xs text-slate-500 font-medium">Akses dashboard pengelolaan data desa terpadu.</p>
+                </div>
 
-            {errorMsg && (
-              <div className="p-3 rounded-xl bg-rose-50 border border-rose-100 text-rose-800 text-[11px] flex items-center space-x-2 animate-in shake-1">
-                <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
-                <span>{errorMsg}</span>
-              </div>
-            )}
+                <AnimatePresence>
+                  {errorMsg && (
+                    <motion.div
+                      initial={{ opacity: 0, x: -6 }}
+                      animate={{ opacity: 1, x: [0, -5, 5, -3, 3, 0] }}
+                      exit={{ opacity: 0, y: -4 }}
+                      transition={{ duration: 0.35 }}
+                      className="p-3 rounded-xl bg-rose-50 border border-rose-100 text-rose-800 text-[11px] flex items-center space-x-2"
+                    >
+                      <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                      <span>{errorMsg}</span>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
             <form onSubmit={handleManualLogin} className="space-y-4">
               <div className="space-y-1">
@@ -173,7 +199,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({ isOpen, onClos
         }`}>
           <div className="w-full max-h-full overflow-y-auto no-scrollbar py-6">
             <div className="text-center mb-8 space-y-4">
-              <div className="flex items-center justify-center gap-4 mb-4 animate-in fade-in zoom-in duration-700">
+              <div className="flex items-center justify-center gap-4 mb-4">
                 {villageProfile?.villageLogoUrl && (
                   <img src={villageProfile.villageLogoUrl} alt="Logo Desa" className="h-16 w-auto object-contain drop-shadow-md" />
                 )}
@@ -217,7 +243,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({ isOpen, onClos
 
           <div className="relative z-10 text-center space-y-8 w-full max-w-sm px-4">
             {/* Main Logo Branding on Sliding Panel - Enhanced Spacing to avoid clip-path cropping */}
-            <div className="flex flex-col items-center gap-6 mb-8 animate-in zoom-in-95 duration-500">
+            <div className="flex flex-col items-center gap-6 mb-8">
               <div className="flex items-center justify-center gap-6 flex-wrap">
                 {villageProfile?.villageLogoUrl && villageProfile.villageLogoUrl.length > 10 ? (
                   <img src={villageProfile.villageLogoUrl} alt="Logo Desa" className="h-20 md:h-24 w-auto object-contain drop-shadow-2xl" />
@@ -324,8 +350,10 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({ isOpen, onClos
             </div>
           )}
         </div>
-      </div>
+      </motion.div>
     </div>
+      )}
+    </AnimatePresence>
   );
 };
 

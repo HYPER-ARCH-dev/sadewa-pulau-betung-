@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   LayoutDashboard,
   Users,
@@ -209,48 +210,65 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
     const Icon = item.icon;
 
     return (
-      <button
+      <motion.button
+        whileTap={{ scale: 0.98 }}
         onClick={() => {
           setActiveTab(item.id as AdminTabType);
           if (window.innerWidth < 1024) onClose();
         }}
-        className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition-all duration-300 ease-out group ${
+        className={`relative w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition-colors duration-200 group cursor-pointer ${
           isActive
-            ? 'bg-emerald-800 text-white shadow-md'
-            : 'text-slate-600 hover:bg-emerald-50/50 hover:text-emerald-900'
+            ? 'text-white'
+            : 'text-slate-600 hover:bg-emerald-50/70 hover:text-emerald-900'
         }`}
       >
-        <div className="flex items-center space-x-3 overflow-hidden">
-          <Icon className={`w-4 h-4 shrink-0 transition-transform duration-300 group-hover:scale-110 group-hover:-rotate-6 ${isActive ? 'text-white' : item.iconColor || 'text-slate-400 group-hover:text-emerald-600'}`} />
-          <span className="truncate transition-transform duration-300 group-hover:translate-x-2 inline-block origin-left">{item.label}</span>
+        {isActive && (
+          <motion.span
+            layoutId="admin-sidebar-active-pill"
+            transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+            className="absolute inset-0 rounded-xl bg-emerald-800 shadow-md"
+            aria-hidden="true"
+          />
+        )}
+        <div className="relative z-10 flex items-center space-x-3 overflow-hidden">
+          <Icon className={`w-4 h-4 shrink-0 transition-transform duration-200 group-hover:scale-110 group-hover:-rotate-6 ${isActive ? 'text-white' : item.iconColor || 'text-slate-400 group-hover:text-emerald-600'}`} />
+          <span className="truncate transition-transform duration-200 group-hover:translate-x-1 inline-block origin-left">{item.label}</span>
         </div>
         
-        {item.badge !== undefined && (typeof item.badge === 'string' || item.badge > 0) && (
-          <span className={`min-w-[1.25rem] h-5 rounded-full ${item.badgeColor || 'bg-slate-100 text-slate-700'} ${item.badgeColor?.includes('text') ? '' : 'text-white'} text-[10px] flex items-center justify-center font-bold px-1.5`}>
-            {item.badge}
-          </span>
-        )}
+        <div className="relative z-10 flex items-center gap-1 shrink-0">
+          {item.badge !== undefined && (typeof item.badge === 'string' || item.badge > 0) && (
+            <span className={`min-w-[1.25rem] h-5 rounded-full ${item.badgeColor || 'bg-slate-100 text-slate-700'} ${item.badgeColor?.includes('text') ? '' : 'text-white'} text-[10px] flex items-center justify-center font-bold px-1.5 transition-transform duration-200 group-hover:scale-105`}>
+              {item.badge}
+            </span>
+          )}
 
-        {isActive && (
-          <ChevronRight className="w-3.5 h-3.5 text-white/60 ml-1" />
-        )}
-      </button>
+          {isActive && (
+            <ChevronRight className="w-3.5 h-3.5 text-white/75" />
+          )}
+        </div>
+      </motion.button>
     );
   };
 
   return (
     <>
       {/* Mobile Backdrop */}
-      {isOpen && (
-        <div
-          className="fixed inset-0 bg-slate-950/40 backdrop-blur-sm z-[60] lg:hidden transition-opacity"
-          onClick={onClose}
-        />
-      )}
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.22 }}
+            className="fixed inset-0 bg-slate-950/45 backdrop-blur-sm z-[60] lg:hidden"
+            onClick={onClose}
+          />
+        )}
+      </AnimatePresence>
 
       {/* Sidebar Container */}
       <aside
-        className={`fixed top-0 left-0 h-full bg-white border-r border-slate-200 shadow-xl transition-transform duration-300 z-[70] w-72 lg:z-30 lg:translate-x-0 lg:sticky lg:top-[74px] lg:h-[calc(100vh-90px)] lg:shrink-0 lg:border lg:border-slate-200/90 lg:rounded-2xl lg:shadow-sm lg:bg-white/95 lg:backdrop-blur-sm ${
+        className={`fixed top-0 left-0 h-full bg-white/95 backdrop-blur-md border-r border-slate-200 shadow-2xl transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] z-[70] w-72 lg:z-30 lg:translate-x-0 lg:sticky lg:top-[74px] lg:h-[calc(100vh-90px)] lg:shrink-0 lg:border lg:border-slate-200/90 lg:rounded-2xl lg:shadow-sm lg:bg-white/90 lg:backdrop-blur-md ${
           isOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >

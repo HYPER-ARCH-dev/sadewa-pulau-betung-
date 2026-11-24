@@ -3,7 +3,7 @@ import { ViewType, ToastMessage } from '../types';
 
 export interface UIContextType {
   currentView: ViewType;
-  navigateTo: (view: ViewType, options?: { trackingCode?: string; newsId?: string; serviceId?: string }) => void;
+  navigateTo: (view: ViewType, options?: { trackingCode?: string; newsId?: string; serviceId?: string; bansosQuery?: string }) => void;
   isSearchOpen: boolean;
   setIsSearchOpen: (open: boolean) => void;
   toasts: ToastMessage[];
@@ -15,6 +15,8 @@ export interface UIContextType {
   setSelectedServiceId: (id: string | null) => void;
   directTrackingCode: string | null;
   setDirectTrackingCode: (code: string | null) => void;
+  bansosSearchQuery: string | null;
+  setBansosSearchQuery: (query: string | null) => void;
   darkMode: boolean;
   toggleDarkMode: () => void;
   fontSize: 'normal' | 'large' | 'xlarge';
@@ -30,6 +32,7 @@ export const UIProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   const [selectedNewsId, setSelectedNewsId] = useState<string | null>(null);
   const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null);
   const [directTrackingCode, setDirectTrackingCode] = useState<string | null>(null);
+  const [bansosSearchQuery, setBansosSearchQuery] = useState<string | null>(null);
   const [fontSize, setFontSizeState] = useState<'normal' | 'large' | 'xlarge'>(() => {
     try {
       const saved = localStorage.getItem('sadewa_font_size');
@@ -82,11 +85,12 @@ export const UIProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     setDarkMode(prev => !prev);
   }, []);
 
-  const navigateTo = useCallback((view: ViewType, options?: { trackingCode?: string; newsId?: string; serviceId?: string }) => {
+  const navigateTo = useCallback((view: ViewType, options?: { trackingCode?: string; newsId?: string; serviceId?: string; bansosQuery?: string }) => {
     setCurrentView(view);
     if (options?.newsId) setSelectedNewsId(options.newsId);
     if (options?.serviceId) setSelectedServiceId(options.serviceId);
     if (options?.trackingCode) setDirectTrackingCode(options.trackingCode);
+    if (options?.bansosQuery !== undefined) setBansosSearchQuery(options.bansosQuery);
     window.scrollTo(0, 0);
   }, []);
 
@@ -117,6 +121,8 @@ export const UIProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       setSelectedServiceId,
       directTrackingCode, 
       setDirectTrackingCode,
+      bansosSearchQuery,
+      setBansosSearchQuery,
       darkMode,
       toggleDarkMode,
       fontSize,

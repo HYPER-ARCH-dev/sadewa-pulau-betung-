@@ -23,6 +23,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { ProjectStatusBadge } from '../common/StatusBadge';
+import { AnimatedProgressBar } from '../common/AnimatedProgressBar';
 
 export const DevelopmentView: React.FC = () => {
   const { developmentProjects, likeDevelopmentProject, addProjectComment, likeProjectComment, isItemLiked, addToast } = useApp();
@@ -322,14 +323,13 @@ export const DevelopmentView: React.FC = () => {
                   <div className="space-y-1.5">
                     <div className="flex justify-between text-xs font-semibold text-slate-700">
                       <span>Realisasi Fisik Lapangan</span>
-                      <span className="font-mono text-emerald-700">{project.progressPercent}%</span>
+                      <span className="font-mono text-emerald-700 tabular-nums">{project.progressPercent}%</span>
                     </div>
-                    <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-emerald-600 rounded-full transition-all duration-500"
-                        style={{ width: `${project.progressPercent}%` }}
-                      />
-                    </div>
+                    <AnimatedProgressBar
+                      value={project.progressPercent}
+                      trackClassName="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden"
+                      barClassName="h-full bg-emerald-600 rounded-full"
+                    />
                   </div>
 
                   {/* Key Metrics */}

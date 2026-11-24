@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
-import { VillageService } from '../../types';
+import { VillageService, ServiceRequest } from '../../types';
 import { WhatsAppService } from '../../services/whatsappService';
 import {
   FileText,
@@ -26,6 +26,7 @@ import {
   BadgeCheck
 } from 'lucide-react';
 import { SadewaHouseLogo } from '../common/SadewaHouseLogo';
+import { OfficialLetterPrintModal } from '../letters/OfficialLetterPrintModal';
 import { api } from '../../services/api';
 import {
   calculateHaversineDistance,
@@ -946,6 +947,52 @@ export const LetterForm: React.FC<LetterFormProps> = ({ onBackToCatalog, onTrack
       return `${lat}, ${lng}`;
     }
     return '';
+  };
+
+  const [previewDraftRequest, setPreviewDraftRequest] = useState<ServiceRequest | null>(null);
+
+  const handleOpenDraftPreview = () => {
+    if (!activeService) return;
+    if (!citizenName.trim() || !citizenNik.trim()) {
+      addToast('error', 'Data Belum Lengkap', 'Mohon isi Nama Lengkap dan NIK Pemohon terlebih dahulu untuk melihat pratinjau format surat.');
+      return;
+    }
+
+    let maskedNik = citizenNik.trim();
+    if (maskedNik.length >= 10) {
+      maskedNik = maskedNik.substring(0, 6) + '******' + maskedNik.substring(maskedNik.length - 4);
+    } else {
+      maskedNik = '360105******0001';
+    }
+
+    const cleanCitizenNotes = notes.trim() || (extraFields.purpose ? String(extraFields.purpose).trim() : '');
+    const draftReq: ServiceRequest = {
+      id: 'draft-preview-' + Date.now(),
+      trackingCode: 'DRAFT-PREVIEW',
+      serviceId: activeService.id,
+      serviceName: activeService.name,
+      citizenName: citizenName.trim(),
+      citizenNik: citizenNik.trim(),
+      citizenNikMasked: maskedNik,
+      phone: phone.trim() || '-',
+      addressDusun: addressDusun || 'Dusun Betung Indah',
+      citizenGender: citizenGender || 'Laki-laki',
+      citizenBirthPlace: citizenBirthPlace.trim() || '-',
+      citizenBirthDate: citizenBirthDate || '-',
+      requestDate: new Date().toISOString(),
+      status: 'diajukan',
+      notes: cleanCitizenNotes || 'Pratinjau draf mandiri sebelum dikirim ke kantor desa.',
+      staffNotes: 'DOKUMEN DRAF — PRATINJAU MANDIRI WARGA (BELUM DISAHKAN KANTOR DESA)',
+      formData: {
+        ...extraFields,
+        gender: citizenGender,
+        birth_place: citizenBirthPlace.trim(),
+        birth_date: citizenBirthDate
+      },
+      officialLetterNumber: 'DRAFT / ' + (activeService.letterClass || 'CLASS_A') + ' / ' + new Date().getFullYear()
+    };
+
+    setPreviewDraftRequest(draftReq);
   };
 
   const handleFormSubmit = (e: React.FormEvent) => {
@@ -2442,12 +2489,21 @@ export const LetterForm: React.FC<LetterFormProps> = ({ onBackToCatalog, onTrack
               </label>
             </div>
 
-            {/* Submit Button */}
-            <div className="pt-4">
+            {/* Submit & Preview Buttons */}
+            <div className="pt-4 flex flex-col sm:flex-row gap-3">
+              <button
+                type="button"
+                onClick={handleOpenDraftPreview}
+                className="flex-1 py-3 rounded-xl border border-emerald-600 text-emerald-700 hover:bg-emerald-50 font-bold text-xs sm:text-sm transition-all flex items-center justify-center space-x-2 cursor-pointer shadow-sm"
+              >
+                <Eye className="w-4 h-4" />
+                <span>Pratinjau Format Surat (Draft)</span>
+              </button>
+
               <button
                 type="submit"
                 disabled={!isAgreed}
-                className="w-full py-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs sm:text-sm shadow-md transition-all active:scale-95 flex items-center justify-center space-x-2 cursor-pointer"
+                className="flex-1 py-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs sm:text-sm shadow-md transition-all active:scale-95 flex items-center justify-center space-x-2 cursor-pointer"
               >
                 <Send className="w-4 h-4" />
                 <span>Kirim Permohonan Surat</span>
@@ -2456,6 +2512,13 @@ export const LetterForm: React.FC<LetterFormProps> = ({ onBackToCatalog, onTrack
           </form>
         </div>
       )}
+
+      {/* Draft Preview Modal */}
+      <OfficialLetterPrintModal
+        isOpen={!!previewDraftRequest}
+        onClose={() => setPreviewDraftRequest(null)}
+        request={previewDraftRequest}
+      />
     </div>
   );
 };

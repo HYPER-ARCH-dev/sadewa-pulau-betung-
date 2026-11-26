@@ -469,17 +469,34 @@ export interface SporadikFormData {
 }
 
 // Peta Titik Fasilitas
+export type FacilityVerificationStatus = 'TERVERIFIKASI' | 'PERLU_VERIFIKASI' | 'BELUM_TERVERIFIKASI';
+
+export type FacilityCoordinateSource =
+  | 'KOORDINAT_EKSPLISIT'
+  | 'PLUS_CODE_OLC'
+  | 'REFERENSI_LAMA'
+  | 'SURVEY_LAPANGAN'
+  | 'VERIFIKASI_LAPANGAN'
+  | 'BELUM_TERKONFIRMASI';
+
 export interface MapFacility {
   id: string;
+  villageId?: string;
   name: string;
   category: 'kantor_desa' | 'pendidikan' | 'kesehatan' | 'ibadah' | 'infrastruktur' | 'ekonomi' | 'wisata' | 'olahraga' | 'lainnya';
   address: string;
   dusun: string;
   coordinatesLabel: string;
   description: string;
-  coordinates?: [number, number];
+  coordinates?: [number, number] | null;
   imageUrl?: string;
   contact?: string;
+  plusCode?: string;
+  verificationStatus?: FacilityVerificationStatus;
+  coordinateSource?: FacilityCoordinateSource;
+  locationNotes?: string;
+  boundaryMembershipNote?: string;
+  isActive?: boolean;
 }
 
 // Audit Log Sistem
@@ -580,7 +597,7 @@ export type UmkmProduct = UmkmItem & {
 export type FacilityPoint = MapFacility & {
   imageUrl?: string;
   contact?: string;
-  coordinates?: [number, number];
+  coordinates?: [number, number] | null;
 };
 
 export interface PublicDemographics {

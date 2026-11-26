@@ -10,6 +10,7 @@ import { getCurrentTenantContext } from '../db/tenantContext';
 import { getDb } from '../db/database';
 import { sanitizeDiagnosticMessage } from '../db/connection-diagnostic';
 import { hashPassword, verifyPassword, verifyToken } from '../auth';
+import { normalizeMapFacilityRecord } from '../utils/facilityNormalizer';
 
 const allowJsonFallback = () => isJsonFallbackAllowed();
 
@@ -402,7 +403,7 @@ router.get('/bootstrap', async (req: Request, res: ExpressResponse) => {
             officials: (db.officials || []).filter((o: any) => o.isActive !== false),
             potentials: db.potentials || [],
             umkm: (db.umkm || []).filter((u: any) => u.isVerified !== false),
-            facilities: db.facilities || [],
+            facilities: (db.facilities || []).map(normalizeMapFacilityRecord),
             gallery: db.gallery || [],
             territories: db.territories || [],
             publicComplaints: fallbackPublicComplaints,
@@ -562,7 +563,7 @@ router.get('/bootstrap', async (req: Request, res: ExpressResponse) => {
         officials,
         potentials,
         umkm,
-        facilities,
+        facilities: (Array.isArray(facilities) ? facilities : []).map(normalizeMapFacilityRecord),
         gallery,
         territories,
         publicComplaints,
@@ -1605,16 +1606,16 @@ router.get('/umkm', async (req: Request, res: ExpressResponse) => {
 router.get('/facilities', async (req: Request, res: ExpressResponse) => {
   try {
     if (!(await isDatabaseAvailableCached())) {
-      const fallback = allowJsonFallback() ? getDb().facilities || [] : [];
+      const fallback = allowJsonFallback() ? (getDb().facilities || []).map(normalizeMapFacilityRecord) : [];
       return res.json({ success: true, data: fallback, degraded: true });
     }
     const data = await getPrisma().mapFacility.findMany({
       orderBy: { name: 'asc' }
     });
-    return res.json({ success: true, data });
+    return res.json({ success: true, data: data.map(normalizeMapFacilityRecord) });
   } catch (error: any) {
     console.warn('⚠️ [PUBLIC-FACILITIES-DEGRADED]:', sanitizeDiagnosticMessage(error?.message || String(error)));
-    const fallback = allowJsonFallback() ? getDb().facilities || [] : [];
+    const fallback = allowJsonFallback() ? (getDb().facilities || []).map(normalizeMapFacilityRecord) : [];
     return res.json({ success: true, data: fallback, degraded: true });
   }
 });

@@ -97,9 +97,15 @@ export interface GeoJsonPolygonGeometry {
 /** Standard RFC 7946 GeoJSON bbox: [minLng, minLat, maxLng, maxLat] */
 export type GisBoundingBox = [number, number, number, number];
 
+export type BoundaryRole = 'MAIN_VILLAGE' | 'NEIGHBOR_VILLAGE';
+
 export interface GisVillageBoundary {
   id: string;
   villageId?: string | null;
+  villageName?: string | null;
+  boundaryRole?: BoundaryRole;
+  showOnMap?: boolean;
+  fillColor?: string | null;
   regionCode?: string | null;
   status: BoundaryVerificationStatus;
   sourceType: BoundarySourceType;
@@ -122,6 +128,10 @@ export interface GisVillageBoundary {
 }
 
 export interface CreateVillageBoundaryInput {
+  villageName?: string | null;
+  boundaryRole?: BoundaryRole;
+  showOnMap?: boolean;
+  fillColor?: string | null;
   regionCode?: string | null;
   status?: BoundaryVerificationStatus;
   sourceType: BoundarySourceType;
@@ -134,6 +144,10 @@ export interface CreateVillageBoundaryInput {
 }
 
 export interface UpdateVillageBoundaryInput {
+  villageName?: string | null;
+  boundaryRole?: BoundaryRole;
+  showOnMap?: boolean;
+  fillColor?: string | null;
   regionCode?: string | null;
   sourceType?: BoundarySourceType;
   sourceName?: string | null;
@@ -164,6 +178,7 @@ export interface GisBootstrapPayload {
   regionCode?: string | null;
   config: GisTenantConfig;
   activeBoundary: GisVillageBoundary | null;
+  visibleBoundaries?: GisVillageBoundary[];
   hasVerifiedBoundary: boolean;
   dataSource: 'database' | 'derived_profile' | 'neutral_fallback';
 }

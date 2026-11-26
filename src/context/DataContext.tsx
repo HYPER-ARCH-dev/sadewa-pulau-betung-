@@ -1303,14 +1303,27 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [logActivity]);
 
   const addFacility = useCallback((item: Omit<MapFacility, 'id'>) => {
-    const newFac: MapFacility = { ...item, id: generateId('fac') };
-    setFacilities((prev) => [...prev, newFac]);
-    api.addFacility(newFac);
+    const tempId = generateId('fac');
+    const resolvedIsActive =
+      typeof item.isActive === 'boolean'
+        ? item.isActive
+        : Boolean(Array.isArray(item.coordinates) && item.coordinates.length >= 2);
+    const optimisticFac: MapFacility = { ...item, isActive: resolvedIsActive, id: tempId };
+    setFacilities((prev) => [optimisticFac, ...prev]);
+    api.addFacility({ ...item, isActive: resolvedIsActive }).then((res) => {
+      if (res.success && res.data) {
+        setFacilities((prev) => prev.map((f) => (f.id === tempId ? res.data! : f)));
+      }
+    });
   }, []);
 
   const updateFacility = useCallback((id: string, item: Partial<MapFacility>) => {
-    setFacilities((prev) => prev.map((f) => f.id === id ? { ...f, ...item } : f));
-    api.updateFacility(id, item);
+    setFacilities((prev) => prev.map((f) => (f.id === id ? { ...f, ...item } : f)));
+    api.updateFacility(id, item).then((res) => {
+      if (res.success && res.data) {
+        setFacilities((prev) => prev.map((f) => (f.id === id ? res.data! : f)));
+      }
+    });
   }, []);
 
   const deleteFacility = useCallback((id: string) => {

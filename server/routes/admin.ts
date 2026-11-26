@@ -26,6 +26,11 @@ import { getStorageArchitectureSummary } from '../config/storageRegistry';
 import { getAdminArchitectureMap } from '../config/adminModuleRegistry';
 import { runDatabaseBackup } from '../scripts/db-backup';
 import { getPublicGisBootstrap } from '../services/gis/gisRepository';
+import {
+  buildFacilityMetadataGeoJson,
+  normalizeMapFacilityRecord,
+  parseIncomingFacilityCoordinates
+} from '../utils/facilityNormalizer';
 
 const router = Router();
 
@@ -3449,50 +3454,81 @@ router.put('/territories', requireRolesOrPermission(['super_admin', 'admin_desa'
 // 10. Facilities & Village Places (Fasilitas, Titik Peta, & Lokasi Desa)
 router.post('/facilities', requireRolesOrPermission(['super_admin', 'admin_desa'], ['facilities']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
-    const { name, category, address, dusun, coordinatesLabel, description, coordinates, imageUrl, contact } = req.body;
+    const {
+      villageId,
+      name,
+      category,
+      address,
+      dusun,
+      coordinatesLabel,
+      description,
+      coordinates,
+      imageUrl,
+      contact,
+      plusCode,
+      verificationStatus,
+      coordinateSource,
+      locationNotes,
+      boundaryMembershipNote,
+      isActive
+    } = req.body;
     if (!name || !address) {
       return res.status(400).json({ success: false, error: 'Nama fasilitas dan alamat wajib diisi.' });
     }
 
-    let resolvedCoordinates: [number, number] | null = null;
-    if (
-      Array.isArray(coordinates) &&
-      coordinates.length >= 2 &&
-      Number.isFinite(Number(coordinates[0])) &&
-      Number.isFinite(Number(coordinates[1])) &&
-      !(Number(coordinates[0]) === 0 && Number(coordinates[1]) === 0)
-    ) {
-      resolvedCoordinates = [Number(coordinates[0]), Number(coordinates[1])];
-    } else {
-      const gis = await getPublicGisBootstrap().catch(() => null);
-      if (
-        gis?.config?.centerLat != null &&
-        gis?.config?.centerLng != null &&
-        Number.isFinite(gis.config.centerLat) &&
-        Number.isFinite(gis.config.centerLng)
-      ) {
-        resolvedCoordinates = [gis.config.centerLat, gis.config.centerLng];
-      }
-    }
-
-    if (!resolvedCoordinates) {
+    const parsedCoords = parseIncomingFacilityCoordinates(coordinates);
+    if (!parsedCoords.valid) {
       return res.status(400).json({
         success: false,
-        error: 'Koordinat lokasi fasilitas wajib diisi karena titik pusat peta desa belum dikonfigurasi.'
+        error: 'Format koordinat tidak valid. Gunakan pasangan [latitude, longitude] yang valid atau kosongkan jika belum terkonfirmasi.'
       });
     }
 
+    const resolvedCoordinates = parsedCoords.value;
+    const resolvedIsActive =
+      typeof isActive === 'boolean' ? isActive : Boolean(resolvedCoordinates);
+    const tenantVillageId =
+      typeof villageId === 'string' && villageId.trim()
+        ? villageId.trim()
+        : getCurrentTenantContext()?.tenantId || 'tenant_pulau_betung';
     const cleanDusun = typeof dusun === 'string' && dusun.trim() ? dusun.trim() : 'Wilayah Desa';
+    const cleanPlusCode =
+      typeof plusCode === 'string' && plusCode.trim() ? plusCode.trim().toUpperCase() : undefined;
+    const cleanVerificationStatus =
+      typeof verificationStatus === 'string' && verificationStatus.trim()
+        ? verificationStatus.trim()
+        : 'PERLU_VERIFIKASI';
+    const cleanSource =
+      typeof coordinateSource === 'string' && coordinateSource.trim()
+        ? coordinateSource.trim()
+        : resolvedCoordinates
+        ? cleanPlusCode
+          ? 'PLUS_CODE_OLC'
+          : 'KOORDINAT_EKSPLISIT'
+        : 'BELUM_TERKONFIRMASI';
     const cleanLabel =
       typeof coordinatesLabel === 'string' && coordinatesLabel.trim()
         ? coordinatesLabel.trim()
-        : `${resolvedCoordinates[0].toFixed(4)}°, ${resolvedCoordinates[1].toFixed(4)}°`;
+        : resolvedCoordinates
+        ? `${resolvedCoordinates[0].toFixed(4)}°, ${resolvedCoordinates[1].toFixed(4)}°${
+            cleanPlusCode ? ` (Plus Code ${cleanPlusCode})` : ''
+          }`
+        : 'Koordinat belum terkonfirmasi';
+    const cleanImageUrl = typeof imageUrl === 'string' ? imageUrl.trim() : '';
+    const cleanContact = typeof contact === 'string' ? contact.trim() : '';
+    const cleanLocationNotes =
+      typeof locationNotes === 'string' && locationNotes.trim() ? locationNotes.trim() : undefined;
+    const cleanBoundaryNote =
+      typeof boundaryMembershipNote === 'string' && boundaryMembershipNote.trim()
+        ? boundaryMembershipNote.trim()
+        : undefined;
 
     if (!(await isDatabaseAvailableCached())) {
       const db = getDb();
       db.facilities = db.facilities || [];
-      const created = {
+      const created = normalizeMapFacilityRecord({
         id: generateServerId('fac'),
+        villageId: tenantVillageId,
         name: name.trim(),
         category: category || 'infrastruktur',
         address: address.trim(),
@@ -3500,25 +3536,42 @@ router.post('/facilities', requireRolesOrPermission(['super_admin', 'admin_desa'
         coordinatesLabel: cleanLabel,
         coordinates: resolvedCoordinates,
         description: description || '',
-        imageUrl: imageUrl || 'https://images.unsplash.com/photo-1577495508048-b635879837f1?w=800&auto=format&fit=crop&q=80',
-        contact: contact || ''
-      };
+        imageUrl: cleanImageUrl,
+        contact: cleanContact,
+        plusCode: cleanPlusCode,
+        verificationStatus: cleanVerificationStatus,
+        coordinateSource: cleanSource,
+        locationNotes: cleanLocationNotes,
+        boundaryMembershipNote: cleanBoundaryNote,
+        isActive: resolvedIsActive
+      });
       db.facilities.unshift(created);
       saveDb(db);
       return res.status(201).json({ success: true, degraded: true, message: 'Fasilitas desa berhasil ditambahkan.', data: created });
     }
 
+    const metadataGeoJson = buildFacilityMetadataGeoJson({
+      plusCode: cleanPlusCode,
+      verificationStatus: cleanVerificationStatus,
+      coordinateSource: cleanSource,
+      locationNotes: cleanLocationNotes,
+      boundaryMembershipNote: cleanBoundaryNote,
+      isActive: resolvedIsActive
+    });
+
     const newFacility = await getPrisma().mapFacility.create({
       data: {
+        villageId: tenantVillageId,
         name: name.trim(),
         category: category || 'infrastruktur',
         address: address.trim(),
         dusun: cleanDusun,
         coordinatesLabel: cleanLabel,
-        coordinates: resolvedCoordinates,
+        coordinates: resolvedCoordinates ?? [],
         description: description || '',
-        imageUrl: imageUrl || 'https://images.unsplash.com/photo-1577495508048-b635879837f1?w=800&auto=format&fit=crop&q=80',
-        contact: contact || ''
+        imageUrl: cleanImageUrl,
+        contact: cleanContact,
+        ...(metadataGeoJson ? { geometryGeoJson: metadataGeoJson } : {})
       }
     });
 
@@ -3532,7 +3585,11 @@ router.post('/facilities', requireRolesOrPermission(['super_admin', 'admin_desa'
       req.ip || '127.0.0.1'
     );
 
-    return res.status(201).json({ success: true, message: 'Fasilitas desa berhasil ditambahkan.', data: newFacility });
+    return res.status(201).json({
+      success: true,
+      message: 'Fasilitas desa berhasil ditambahkan.',
+      data: normalizeMapFacilityRecord(newFacility)
+    });
   } catch (error: any) {
     return res.status(500).json({ success: false, error: 'Gagal menambahkan fasilitas desa.' });
   }
@@ -3541,18 +3598,68 @@ router.post('/facilities', requireRolesOrPermission(['super_admin', 'admin_desa'
 router.put('/facilities/:id', requireRolesOrPermission(['super_admin', 'admin_desa'], ['facilities']), async (req: AuthenticatedRequest, res: ExpressResponse) => {
   try {
     const { id } = req.params;
+    const body = req.body || {};
+
+    if ('coordinates' in body) {
+      const parsedCoords = parseIncomingFacilityCoordinates(body.coordinates);
+      if (!parsedCoords.valid) {
+        return res.status(400).json({
+          success: false,
+          error: 'Format koordinat tidak valid. Gunakan pasangan [latitude, longitude] yang valid atau null.'
+        });
+      }
+      body.coordinates = parsedCoords.value;
+    }
+
     if (!(await isDatabaseAvailableCached())) {
       const db = getDb();
       const idx = (db.facilities || []).findIndex((f: any) => f.id === id);
       if (idx === -1) return res.status(404).json({ success: false, error: 'Fasilitas desa tidak ditemukan.' });
-      db.facilities[idx] = { ...db.facilities[idx], ...req.body, id };
+      const currentNormalized = normalizeMapFacilityRecord(db.facilities[idx]);
+      const merged = normalizeMapFacilityRecord({
+        ...currentNormalized,
+        ...body,
+        id,
+        isActive: typeof body.isActive === 'boolean' ? body.isActive : currentNormalized.isActive,
+        imageUrl: typeof body.imageUrl === 'string' ? body.imageUrl.trim() : currentNormalized.imageUrl || ''
+      });
+      db.facilities[idx] = merged;
       saveDb(db);
-      return res.json({ success: true, degraded: true, message: 'Fasilitas desa berhasil diperbarui.', data: db.facilities[idx] });
+      return res.json({ success: true, degraded: true, message: 'Fasilitas desa berhasil diperbarui.', data: merged });
+    }
+
+    const existing = await getPrisma().mapFacility.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ success: false, error: 'Fasilitas desa tidak ditemukan.' });
+    }
+    const existingNormalized = normalizeMapFacilityRecord(existing);
+    const mergedForMeta = {
+      ...existingNormalized,
+      ...body,
+      isActive: typeof body.isActive === 'boolean' ? body.isActive : existingNormalized.isActive
+    };
+    const metadataGeoJson = buildFacilityMetadataGeoJson(mergedForMeta);
+
+    const prismaUpdateData: Record<string, any> = {};
+    if (typeof body.villageId === 'string') prismaUpdateData.villageId = body.villageId.trim();
+    if (typeof body.name === 'string') prismaUpdateData.name = body.name.trim();
+    if (typeof body.category === 'string') prismaUpdateData.category = body.category;
+    if (typeof body.address === 'string') prismaUpdateData.address = body.address.trim();
+    if (typeof body.dusun === 'string') prismaUpdateData.dusun = body.dusun.trim();
+    if (typeof body.coordinatesLabel === 'string') prismaUpdateData.coordinatesLabel = body.coordinatesLabel.trim();
+    if (typeof body.description === 'string') prismaUpdateData.description = body.description;
+    if ('coordinates' in body) prismaUpdateData.coordinates = body.coordinates ?? [];
+    if (typeof body.imageUrl === 'string') prismaUpdateData.imageUrl = body.imageUrl.trim();
+    if (typeof body.contact === 'string' || body.contact === undefined) {
+      if ('contact' in body) prismaUpdateData.contact = body.contact || '';
+    }
+    if (metadataGeoJson) {
+      prismaUpdateData.geometryGeoJson = metadataGeoJson;
     }
 
     const facility = await getPrisma().mapFacility.update({
       where: { id },
-      data: req.body
+      data: prismaUpdateData
     });
 
     await recordAuditLogDb(
@@ -3565,7 +3672,11 @@ router.put('/facilities/:id', requireRolesOrPermission(['super_admin', 'admin_de
       req.ip || '127.0.0.1'
     );
 
-    return res.json({ success: true, message: 'Fasilitas desa berhasil diperbarui.', data: facility });
+    return res.json({
+      success: true,
+      message: 'Fasilitas desa berhasil diperbarui.',
+      data: normalizeMapFacilityRecord(facility)
+    });
   } catch (error: any) {
     return res.status(500).json({ success: false, error: 'Gagal memperbarui fasilitas desa.' });
   }
@@ -3581,7 +3692,16 @@ router.delete('/facilities/:id', requireRolesOrPermission(['super_admin', 'admin
       return res.json({ success: true, degraded: true, message: 'Fasilitas desa berhasil dihapus.' });
     }
 
-    const removed = await getPrisma().mapFacility.delete({ where: { id } });
+    let removedName = id;
+    try {
+      const removed = await getPrisma().mapFacility.delete({ where: { id } });
+      removedName = removed.name;
+    } catch (delErr: any) {
+      if (delErr?.code === 'P2025') {
+        return res.json({ success: true, message: 'Fasilitas desa sudah tidak ada di database.' });
+      }
+      throw delErr;
+    }
 
     await recordAuditLogDb(
       req.user!.userId,
@@ -3589,7 +3709,7 @@ router.delete('/facilities/:id', requireRolesOrPermission(['super_admin', 'admin
       req.user!.role,
       'Hapus Fasilitas Desa',
       'Peta & Fasilitas',
-      `Menghapus fasilitas: "${removed.name}"`,
+      `Menghapus fasilitas: "${removedName}"`,
       req.ip || '127.0.0.1'
     );
 

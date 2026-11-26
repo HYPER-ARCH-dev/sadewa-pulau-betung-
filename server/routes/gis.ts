@@ -13,10 +13,12 @@ import {
   upsertTenantGisConfig,
   getVillageBoundaries,
   createVillageBoundary,
+  createVillageBoundariesBatch,
   updateVillageBoundary,
   verifyVillageBoundary,
   setActiveVillageBoundary,
-  deleteVillageBoundary
+  deleteVillageBoundary,
+  getGisChangeLogs
 } from '../services/gis/gisRepository';
 
 export const publicGisRouter = Router();
@@ -168,6 +170,10 @@ adminGisRouter.post(
 
       const created = await createVillageBoundary(
         {
+          villageName: body.villageName,
+          boundaryRole: body.boundaryRole,
+          showOnMap: body.showOnMap,
+          fillColor: body.fillColor,
           regionCode: body.regionCode,
           status: body.status,
           sourceType: body.sourceType || 'ADMIN_DIGITIZED',
@@ -190,7 +196,7 @@ adminGisRouter.post(
         req.user!.role,
         'Simpan Batas Wilayah Desa',
         'WebGIS Spasial',
-        `Menyimpan poligon batas wilayah desa (${created.sourceType}, status=${created.status}, luas=${created.areaSqM} m²)`,
+        `Menyimpan poligon batas wilayah "${created.villageName || created.sourceName || created.id}" (${created.sourceType}, status=${created.status}, luas=${created.areaSqM} m²)`,
         req.ip || '127.0.0.1'
       );
 
@@ -209,6 +215,69 @@ adminGisRouter.post(
   }
 );
 
+adminGisRouter.post(
+  '/boundaries/batch',
+  requireRolesOrPermission(['super_admin', 'admin_desa'], ['webgis', 'territories']),
+  async (req: AuthenticatedRequest, res: ExpressResponse) => {
+    try {
+      const items = Array.isArray(req.body?.items) ? req.body.items : [];
+      if (items.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'Daftar batas wilayah (items) wajib disertakan dan minimal berisi 1 poligon.'
+        });
+      }
+
+      const createdList = await createVillageBoundariesBatch(
+        items.map((item: any) => ({
+          villageName: item?.villageName,
+          boundaryRole: item?.boundaryRole,
+          showOnMap: item?.showOnMap,
+          fillColor: item?.fillColor,
+          regionCode: item?.regionCode,
+          status: item?.status,
+          sourceType: item?.sourceType || 'IMPORTED_GEOJSON',
+          sourceName: item?.sourceName,
+          sourceYear: item?.sourceYear ? Number(item.sourceYear) : undefined,
+          licenseNote: item?.licenseNote,
+          geometryGeoJson: item?.geometryGeoJson,
+          isActive: Boolean(item?.isActive),
+          verificationNotes: item?.verificationNotes
+        })),
+        {
+          userId: req.user?.userId || 'system',
+          userName: req.user?.name || 'Administrator'
+        }
+      );
+
+      await recordAuditLogDb(
+        req.user!.userId,
+        req.user!.name,
+        req.user!.role,
+        'Impor Massal Batas Desa',
+        'WebGIS Spasial',
+        `Mengimpor ${createdList.length} poligon batas wilayah desa (${createdList.map((b) => b.villageName || b.sourceName || b.id).join(', ')})`,
+        req.ip || '127.0.0.1'
+      );
+
+      return res.status(201).json({
+        success: true,
+        message: `${createdList.length} batas wilayah desa berhasil disimpan.`,
+        data: {
+          items: createdList,
+          boundaries: createdList
+        }
+      });
+    } catch (err: any) {
+      const status = typeof err?.statusCode === 'number' ? err.statusCode : 400;
+      return res.status(status).json({
+        success: false,
+        error: err?.message || 'Gagal mengimpor batas wilayah multi-desa.'
+      });
+    }
+  }
+);
+
 adminGisRouter.put(
   '/boundaries/:id',
   requireRolesOrPermission(['super_admin', 'admin_desa'], ['webgis', 'territories']),
@@ -220,6 +289,10 @@ adminGisRouter.put(
       const updated = await updateVillageBoundary(
         id,
         {
+          villageName: body.villageName,
+          boundaryRole: body.boundaryRole,
+          showOnMap: body.showOnMap,
+          fillColor: body.fillColor,
           regionCode: body.regionCode,
           sourceType: body.sourceType,
           sourceName: body.sourceName,
@@ -241,7 +314,7 @@ adminGisRouter.put(
         req.user!.role,
         'Perbarui Batas Wilayah Desa',
         'WebGIS Spasial',
-        `Memperbarui poligon batas wilayah desa id=${id} (${updated.sourceType})`,
+        `Memperbarui poligon batas wilayah desa id=${id} (${updated.villageName || updated.sourceType})`,
         req.ip || '127.0.0.1'
       );
 
@@ -393,4 +466,25 @@ adminGisRouter.delete(
     }
   }
 );
+
+adminGisRouter.get(
+  '/changelogs',
+  requireRolesOrPermission(['super_admin', 'admin_desa'], ['webgis', 'territories']),
+  async (_req: AuthenticatedRequest, res: ExpressResponse) => {
+    try {
+      const logs = await getGisChangeLogs(50);
+      return res.json({
+        success: true,
+        data: logs
+      });
+    } catch (err: any) {
+      console.warn('⚠️ [ADMIN-GIS-GET-CHANGELOGS]:', sanitizeDiagnosticMessage(err?.message || String(err)));
+      return res.status(500).json({
+        success: false,
+        error: 'Gagal mengambil riwayat perubahan GIS.'
+      });
+    }
+  }
+);
+
 

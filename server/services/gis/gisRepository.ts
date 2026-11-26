@@ -17,6 +17,7 @@ import {
   GeoJsonPolygonGeometry,
   BoundaryVerificationStatus,
   BoundarySourceType,
+  BoundaryRole,
   CreateVillageBoundaryInput,
   UpdateVillageBoundaryInput
 } from '../../../src/types/webgis';
@@ -204,6 +205,134 @@ export async function checkGisTablesReady(): Promise<boolean> {
   }
 }
 
+interface StoredBoundaryMeta {
+  villageName?: string | null;
+  boundaryRole?: BoundaryRole;
+  showOnMap?: boolean;
+  fillColor?: string | null;
+  verificationNotes?: string | null;
+}
+
+function attachBoundaryMeta(
+  geometryGeoJson: GeoJsonPolygonGeometry,
+  meta: StoredBoundaryMeta
+): GeoJsonPolygonGeometry & { sadewaMeta?: StoredBoundaryMeta } {
+  const cleanMeta: StoredBoundaryMeta = {};
+  if (meta.villageName !== undefined) cleanMeta.villageName = meta.villageName || null;
+  if (meta.boundaryRole !== undefined) cleanMeta.boundaryRole = meta.boundaryRole;
+  if (meta.showOnMap !== undefined) cleanMeta.showOnMap = Boolean(meta.showOnMap);
+  if (meta.fillColor !== undefined) cleanMeta.fillColor = meta.fillColor || null;
+  if (meta.verificationNotes !== undefined) cleanMeta.verificationNotes = meta.verificationNotes || null;
+
+  return {
+    type: geometryGeoJson.type,
+    coordinates: geometryGeoJson.coordinates,
+    ...(Object.keys(cleanMeta).length > 0 ? { sadewaMeta: cleanMeta } : {})
+  };
+}
+
+function extractBoundaryMeta(rawRow: any): StoredBoundaryMeta {
+  const geoMeta =
+    rawRow?.geometryGeoJson &&
+    typeof rawRow.geometryGeoJson === 'object' &&
+    rawRow.geometryGeoJson.sadewaMeta &&
+    typeof rawRow.geometryGeoJson.sadewaMeta === 'object'
+      ? (rawRow.geometryGeoJson.sadewaMeta as Record<string, any>)
+      : {};
+
+  const villageName =
+    typeof rawRow?.villageName === 'string' && rawRow.villageName.trim()
+      ? rawRow.villageName.trim()
+      : typeof geoMeta.villageName === 'string' && geoMeta.villageName.trim()
+      ? geoMeta.villageName.trim()
+      : null;
+
+  const rawRole = rawRow?.boundaryRole || geoMeta.boundaryRole;
+  const boundaryRole: BoundaryRole = rawRole === 'NEIGHBOR_VILLAGE' ? 'NEIGHBOR_VILLAGE' : 'MAIN_VILLAGE';
+
+  const showOnMap =
+    typeof rawRow?.showOnMap === 'boolean'
+      ? rawRow.showOnMap
+      : typeof geoMeta.showOnMap === 'boolean'
+      ? geoMeta.showOnMap
+      : boundaryRole === 'NEIGHBOR_VILLAGE'
+      ? true
+      : Boolean(rawRow?.isActive);
+
+  const fillColor =
+    typeof rawRow?.fillColor === 'string' && rawRow.fillColor.trim()
+      ? rawRow.fillColor.trim()
+      : typeof geoMeta.fillColor === 'string' && geoMeta.fillColor.trim()
+      ? geoMeta.fillColor.trim()
+      : null;
+
+  const verificationNotes =
+    typeof rawRow?.verificationNotes === 'string'
+      ? rawRow.verificationNotes
+      : typeof geoMeta.verificationNotes === 'string'
+      ? geoMeta.verificationNotes
+      : null;
+
+  return {
+    villageName,
+    boundaryRole,
+    showOnMap,
+    fillColor,
+    verificationNotes
+  };
+}
+
+function sanitizeCleanGeometryGeoJson(rawGeo: any): GeoJsonPolygonGeometry {
+  return {
+    type: rawGeo?.type === 'MultiPolygon' ? 'MultiPolygon' : 'Polygon',
+    coordinates: rawGeo?.coordinates || []
+  };
+}
+
+function mapBoundaryRecord(r: any, fallbackVillageName?: string | null): GisVillageBoundary {
+  const meta = extractBoundaryMeta(r);
+  const resolvedRole: BoundaryRole = meta.boundaryRole || 'MAIN_VILLAGE';
+  return {
+    id: String(r.id),
+    villageId: r.villageId ?? null,
+    villageName:
+      meta.villageName ||
+      (resolvedRole === 'MAIN_VILLAGE' ? fallbackVillageName || null : null) ||
+      r.sourceName ||
+      null,
+    boundaryRole: resolvedRole,
+    showOnMap: typeof meta.showOnMap === 'boolean' ? meta.showOnMap : Boolean(r.isActive),
+    fillColor: meta.fillColor ?? null,
+    regionCode: r.regionCode ?? null,
+    status: (['TERVERIFIKASI', 'PERLU_VERIFIKASI'].includes(r.status)
+      ? r.status
+      : 'BELUM_TERVERIFIKASI') as BoundaryVerificationStatus,
+    sourceType: (r.sourceType || 'UNKNOWN') as BoundarySourceType,
+    sourceName: r.sourceName ?? null,
+    sourceYear: typeof r.sourceYear === 'number' ? r.sourceYear : null,
+    licenseNote: r.licenseNote ?? null,
+    geometryGeoJson: sanitizeCleanGeometryGeoJson(r.geometryGeoJson),
+    bbox: parseBBox(r.bbox),
+    centroidLat: typeof r.centroidLat === 'number' ? r.centroidLat : null,
+    centroidLng: typeof r.centroidLng === 'number' ? r.centroidLng : null,
+    areaSqM: typeof r.areaSqM === 'number' ? r.areaSqM : null,
+    perimeterMeters: typeof r.perimeterMeters === 'number' ? r.perimeterMeters : null,
+    isActive: Boolean(r.isActive),
+    importJobId: r.importJobId ?? null,
+    verifiedBy: r.verifiedBy ?? null,
+    verifiedAt: r.verifiedAt ? new Date(r.verifiedAt).toISOString() : null,
+    verificationNotes: meta.verificationNotes ?? null,
+    createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : undefined,
+    updatedAt: r.updatedAt ? new Date(r.updatedAt).toISOString() : undefined
+  };
+}
+
+function selectVisibleBoundaries(all: GisVillageBoundary[]): GisVillageBoundary[] {
+  return all.filter(
+    (b) => b.isActive || b.showOnMap === true || (b.boundaryRole === 'NEIGHBOR_VILLAGE' && b.showOnMap !== false)
+  );
+}
+
 export async function getPublicGisBootstrap(): Promise<GisBootstrapPayload> {
   const ctx = getCurrentTenantContext();
   const tenantId = ctx?.tenantId || 'default';
@@ -217,14 +346,23 @@ export async function getPublicGisBootstrap(): Promise<GisBootstrapPayload> {
       const officeLat = profile?.officeLocation?.lat;
       const officeLng = profile?.officeLocation?.lng;
 
+      const allBoundaries = (db.gisVillageBoundaries || []).map((b: any) =>
+        mapBoundaryRecord(b, villageName)
+      );
+      const activeBoundary =
+        allBoundaries.find((b) => b.isActive && b.boundaryRole !== 'NEIGHBOR_VILLAGE') ||
+        allBoundaries.find((b) => b.isActive) ||
+        null;
+      const visibleBoundaries = selectVisibleBoundaries(allBoundaries);
+
       if (db.gisTenantConfig) {
-        const activeBoundary = (db.gisVillageBoundaries || []).find((b: any) => b.isActive) || null;
         return {
           tenantId,
           villageName,
           regionCode: db.gisTenantConfig.regionCode || '15.04.05.2009',
           config: buildDefaultConfig(db.gisTenantConfig),
           activeBoundary,
+          visibleBoundaries,
           hasVerifiedBoundary: activeBoundary?.status === 'TERVERIFIKASI',
           dataSource: 'database'
         };
@@ -241,8 +379,9 @@ export async function getPublicGisBootstrap(): Promise<GisBootstrapPayload> {
             centerLng: Number(officeLng),
             defaultZoom: 15
           }),
-          activeBoundary: null,
-          hasVerifiedBoundary: false,
+          activeBoundary,
+          visibleBoundaries,
+          hasVerifiedBoundary: activeBoundary?.status === 'TERVERIFIKASI',
           dataSource: 'derived_profile'
         };
       }
@@ -260,8 +399,9 @@ export async function getPublicGisBootstrap(): Promise<GisBootstrapPayload> {
             defaultZoom: 14,
             bbox: computeBBoxFromPoints(fallbackPoints)
           }),
-          activeBoundary: null,
-          hasVerifiedBoundary: false,
+          activeBoundary,
+          visibleBoundaries,
+          hasVerifiedBoundary: activeBoundary?.status === 'TERVERIFIKASI',
           dataSource: 'derived_profile'
         };
       }
@@ -271,8 +411,9 @@ export async function getPublicGisBootstrap(): Promise<GisBootstrapPayload> {
         villageName,
         regionCode: null,
         config: buildDefaultConfig({ defaultZoom: 5 }),
-        activeBoundary: null,
-        hasVerifiedBoundary: false,
+        activeBoundary,
+        visibleBoundaries,
+        hasVerifiedBoundary: activeBoundary?.status === 'TERVERIFIKASI',
         dataSource: 'neutral_fallback'
       };
     }
@@ -283,6 +424,7 @@ export async function getPublicGisBootstrap(): Promise<GisBootstrapPayload> {
       regionCode: null,
       config: buildDefaultConfig({ defaultZoom: 5 }),
       activeBoundary: null,
+      visibleBoundaries: [],
       hasVerifiedBoundary: false,
       dataSource: 'neutral_fallback'
     };
@@ -317,7 +459,7 @@ export async function getPublicGisBootstrap(): Promise<GisBootstrapPayload> {
   }
 
   let dbConfigRow: any = null;
-  let dbBoundaryRow: any = null;
+  let dbBoundaryRows: any[] = [];
 
   try {
     dbConfigRow = await (prisma as any).gisTenantConfig.findFirst({
@@ -330,9 +472,9 @@ export async function getPublicGisBootstrap(): Promise<GisBootstrapPayload> {
   }
 
   try {
-    dbBoundaryRow = await (prisma as any).gisVillageBoundary.findFirst({
-      where: { isActive: true },
-      orderBy: { updatedAt: 'desc' }
+    dbBoundaryRows = await (prisma as any).gisVillageBoundary.findMany({
+      where: isMultiTenantRoutingEnabled() ? { villageId: tenantId } : {},
+      orderBy: [{ isActive: 'desc' }, { updatedAt: 'desc' }]
     });
   } catch (err) {
     if (!isMissingGisSchemaError(err)) {
@@ -341,29 +483,15 @@ export async function getPublicGisBootstrap(): Promise<GisBootstrapPayload> {
   }
 
   const villageName = safeProfile?.villageName || fallbackVillageName;
-  const regionCode = dbConfigRow?.regionCode || dbBoundaryRow?.regionCode || profileRegionCode || null;
-
-  const activeBoundary: GisVillageBoundary | null = dbBoundaryRow
-    ? {
-        id: String(dbBoundaryRow.id),
-        regionCode: dbBoundaryRow.regionCode ?? null,
-        status: (dbBoundaryRow.status === 'TERVERIFIKASI' ? 'TERVERIFIKASI' : 'BELUM_TERVERIFIKASI') as BoundaryVerificationStatus,
-        sourceType: (dbBoundaryRow.sourceType || 'UNKNOWN') as BoundarySourceType,
-        sourceName: dbBoundaryRow.sourceName ?? null,
-        sourceYear: typeof dbBoundaryRow.sourceYear === 'number' ? dbBoundaryRow.sourceYear : null,
-        licenseNote: dbBoundaryRow.licenseNote ?? null,
-        geometryGeoJson: dbBoundaryRow.geometryGeoJson as GeoJsonPolygonGeometry,
-        bbox: parseBBox(dbBoundaryRow.bbox),
-        centroidLat: typeof dbBoundaryRow.centroidLat === 'number' ? dbBoundaryRow.centroidLat : null,
-        centroidLng: typeof dbBoundaryRow.centroidLng === 'number' ? dbBoundaryRow.centroidLng : null,
-        areaSqM: typeof dbBoundaryRow.areaSqM === 'number' ? dbBoundaryRow.areaSqM : null,
-        perimeterMeters: typeof dbBoundaryRow.perimeterMeters === 'number' ? dbBoundaryRow.perimeterMeters : null,
-        isActive: Boolean(dbBoundaryRow.isActive),
-        verifiedBy: dbBoundaryRow.verifiedBy ?? null,
-        verifiedAt: dbBoundaryRow.verifiedAt ? new Date(dbBoundaryRow.verifiedAt).toISOString() : null,
-        updatedAt: dbBoundaryRow.updatedAt ? new Date(dbBoundaryRow.updatedAt).toISOString() : undefined
-      }
-    : null;
+  const allBoundaries: GisVillageBoundary[] = dbBoundaryRows.map((row) =>
+    mapBoundaryRecord(row, villageName)
+  );
+  const activeBoundary: GisVillageBoundary | null =
+    allBoundaries.find((b) => b.isActive && b.boundaryRole !== 'NEIGHBOR_VILLAGE') ||
+    allBoundaries.find((b) => b.isActive) ||
+    null;
+  const visibleBoundaries = selectVisibleBoundaries(allBoundaries);
+  const regionCode = dbConfigRow?.regionCode || activeBoundary?.regionCode || profileRegionCode || null;
 
   if (dbConfigRow) {
     const modeCandidate = String(dbConfigRow.defaultMapMode || 'roadmap') as MapMode;
@@ -385,6 +513,7 @@ export async function getPublicGisBootstrap(): Promise<GisBootstrapPayload> {
         customSatelliteTileUrl: dbConfigRow.customSatelliteTileUrl ?? null
       }),
       activeBoundary,
+      visibleBoundaries,
       hasVerifiedBoundary: activeBoundary?.status === 'TERVERIFIKASI',
       dataSource: 'database'
     };
@@ -404,6 +533,7 @@ export async function getPublicGisBootstrap(): Promise<GisBootstrapPayload> {
         defaultZoom: 15
       }),
       activeBoundary,
+      visibleBoundaries,
       hasVerifiedBoundary: activeBoundary?.status === 'TERVERIFIKASI',
       dataSource: 'derived_profile'
     };
@@ -449,6 +579,7 @@ export async function getPublicGisBootstrap(): Promise<GisBootstrapPayload> {
         bbox: computeBBoxFromPoints(points)
       }),
       activeBoundary,
+      visibleBoundaries,
       hasVerifiedBoundary: activeBoundary?.status === 'TERVERIFIKASI',
       dataSource: 'derived_profile'
     };
@@ -463,6 +594,7 @@ export async function getPublicGisBootstrap(): Promise<GisBootstrapPayload> {
       defaultZoom: 5
     }),
     activeBoundary,
+    visibleBoundaries,
     hasVerifiedBoundary: activeBoundary?.status === 'TERVERIFIKASI',
     dataSource: 'neutral_fallback'
   };
@@ -764,6 +896,7 @@ export function validateAndParseGeoJsonPolygon(geometry: unknown): {
 export async function getVillageBoundaries(): Promise<GisVillageBoundary[]> {
   const ctx = getCurrentTenantContext();
   const scopedVillageId = ctx?.tenantId || 'default';
+  const fallbackVillageName = ctx?.tenantName || 'Desa Pulau Betung';
 
   if (await isDatabaseAvailableCached()) {
     try {
@@ -773,28 +906,7 @@ export async function getVillageBoundaries(): Promise<GisVillageBoundary[]> {
         orderBy: [{ isActive: 'desc' }, { updatedAt: 'desc' }]
       });
 
-      return rows.map((r: any) => ({
-        id: String(r.id),
-        villageId: r.villageId ?? null,
-        regionCode: r.regionCode ?? null,
-        status: (r.status || 'BELUM_TERVERIFIKASI') as BoundaryVerificationStatus,
-        sourceType: (r.sourceType || 'UNKNOWN') as BoundarySourceType,
-        sourceName: r.sourceName ?? null,
-        sourceYear: typeof r.sourceYear === 'number' ? r.sourceYear : null,
-        licenseNote: r.licenseNote ?? null,
-        geometryGeoJson: r.geometryGeoJson as GeoJsonPolygonGeometry,
-        bbox: parseBBox(r.bbox),
-        centroidLat: typeof r.centroidLat === 'number' ? r.centroidLat : null,
-        centroidLng: typeof r.centroidLng === 'number' ? r.centroidLng : null,
-        areaSqM: typeof r.areaSqM === 'number' ? r.areaSqM : null,
-        perimeterMeters: typeof r.perimeterMeters === 'number' ? r.perimeterMeters : null,
-        isActive: Boolean(r.isActive),
-        importJobId: r.importJobId ?? null,
-        verifiedBy: r.verifiedBy ?? null,
-        verifiedAt: r.verifiedAt ? new Date(r.verifiedAt).toISOString() : null,
-        createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : undefined,
-        updatedAt: r.updatedAt ? new Date(r.updatedAt).toISOString() : undefined
-      }));
+      return rows.map((r: any) => mapBoundaryRecord(r, fallbackVillageName));
     } catch (err) {
       if (!isMissingGisSchemaError(err)) {
         console.warn('⚠️ [GIS-REPO] Gagal mengambil batas wilayah dari DB:', sanitizeDiagnosticMessage(String(err)));
@@ -804,11 +916,23 @@ export async function getVillageBoundaries(): Promise<GisVillageBoundary[]> {
 
   if (isJsonFallbackAllowed()) {
     const db = getDb();
-    const boundaries = db.gisVillageBoundaries || [];
+    const villageName = db.villageProfile?.villageName || fallbackVillageName;
+    const boundaries = (db.gisVillageBoundaries || []).map((b: any) => mapBoundaryRecord(b, villageName));
     return [...boundaries].sort((a: any, b: any) => (b.isActive ? 1 : 0) - (a.isActive ? 1 : 0));
   }
 
   return [];
+}
+
+function resolveSafeBoundaryStatus(input: CreateVillageBoundaryInput): BoundaryVerificationStatus {
+  if (input.status === 'PERLU_VERIFIKASI') return 'PERLU_VERIFIKASI';
+  if (input.status === 'TERVERIFIKASI') {
+    if (input.sourceType === 'OFFICIAL_BIG' || input.sourceType === 'PEMDA') {
+      return 'TERVERIFIKASI';
+    }
+    return 'PERLU_VERIFIKASI';
+  }
+  return 'BELUM_TERVERIFIKASI';
 }
 
 export async function createVillageBoundary(
@@ -817,24 +941,47 @@ export async function createVillageBoundary(
 ): Promise<GisVillageBoundary> {
   const ctx = getCurrentTenantContext();
   const scopedVillageId = ctx?.tenantId || 'default';
+  const fallbackVillageName = ctx?.tenantName || 'Desa Pulau Betung';
 
   const { geometryGeoJson, centroidLat, centroidLng, bbox, areaSqM, perimeterMeters } =
     validateAndParseGeoJsonPolygon(input.geometryGeoJson);
 
-  // Aturan Resmi: Digitasi manual atau import biasa TIDAK boleh otomatis berstatus TERVERIFIKASI
-  let safeStatus: BoundaryVerificationStatus = 'BELUM_TERVERIFIKASI';
-  if (input.status === 'PERLU_VERIFIKASI') {
-    safeStatus = 'PERLU_VERIFIKASI';
-  } else if (input.status === 'TERVERIFIKASI') {
-    if (input.sourceType === 'OFFICIAL_BIG' || input.sourceType === 'PEMDA') {
-      safeStatus = 'TERVERIFIKASI';
-    } else {
-      safeStatus = 'PERLU_VERIFIKASI';
-    }
-  }
+  const safeStatus = resolveSafeBoundaryStatus(input);
+  const boundaryRole: BoundaryRole =
+    input.boundaryRole === 'NEIGHBOR_VILLAGE' ? 'NEIGHBOR_VILLAGE' : 'MAIN_VILLAGE';
+  const villageName =
+    typeof input.villageName === 'string' && input.villageName.trim()
+      ? input.villageName.trim()
+      : boundaryRole === 'MAIN_VILLAGE'
+      ? fallbackVillageName
+      : input.sourceName?.trim() || 'Desa Sebelah';
+  const regionCode = input.regionCode
+    ? String(input.regionCode).trim()
+    : boundaryRole === 'MAIN_VILLAGE'
+    ? '15.04.05.2009'
+    : null;
+  // Neighbor village NEVER hijacks MAIN_VILLAGE isActive
+  const shouldBeActive = boundaryRole === 'MAIN_VILLAGE' && Boolean(input.isActive);
+  const showOnMap =
+    typeof input.showOnMap === 'boolean'
+      ? input.showOnMap
+      : boundaryRole === 'NEIGHBOR_VILLAGE'
+      ? true
+      : shouldBeActive;
+  const fillColor =
+    typeof input.fillColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(input.fillColor.trim())
+      ? input.fillColor.trim().toLowerCase()
+      : boundaryRole === 'NEIGHBOR_VILLAGE'
+      ? '#0284c7'
+      : null;
 
-  const regionCode = input.regionCode ? String(input.regionCode).trim() : '15.04.05.2009';
-  const shouldBeActive = Boolean(input.isActive);
+  const storedGeoJson = attachBoundaryMeta(geometryGeoJson, {
+    villageName,
+    boundaryRole,
+    showOnMap,
+    fillColor,
+    verificationNotes: input.verificationNotes || null
+  });
 
   const dbAvailable = await isDatabaseAvailableCached();
   const tablesReady = dbAvailable ? await checkGisTablesReady() : false;
@@ -842,10 +989,18 @@ export async function createVillageBoundary(
   if (dbAvailable && tablesReady) {
     const created = await runWithTenantRlsTransaction(async (tx: PrismaClient) => {
       if (shouldBeActive) {
-        await (tx as any).gisVillageBoundary.updateMany({
-          where: isMultiTenantRoutingEnabled() ? { villageId: scopedVillageId } : {},
-          data: { isActive: false }
+        const currentRows = await (tx as any).gisVillageBoundary.findMany({
+          where: isMultiTenantRoutingEnabled() ? { villageId: scopedVillageId, isActive: true } : { isActive: true }
         });
+        for (const r of currentRows) {
+          const meta = extractBoundaryMeta(r);
+          if (meta.boundaryRole !== 'NEIGHBOR_VILLAGE') {
+            await (tx as any).gisVillageBoundary.update({
+              where: { id: r.id },
+              data: { isActive: false }
+            });
+          }
+        }
       }
 
       const boundary = await (tx as any).gisVillageBoundary.create({
@@ -854,10 +1009,10 @@ export async function createVillageBoundary(
           regionCode,
           status: safeStatus,
           sourceType: input.sourceType,
-          sourceName: input.sourceName ? String(input.sourceName).trim() : null,
+          sourceName: input.sourceName ? String(input.sourceName).trim() : villageName,
           sourceYear: typeof input.sourceYear === 'number' ? input.sourceYear : null,
           licenseNote: input.licenseNote ? String(input.licenseNote).trim() : null,
-          geometryGeoJson,
+          geometryGeoJson: storedGeoJson,
           bbox,
           centroidLat,
           centroidLng,
@@ -875,7 +1030,7 @@ export async function createVillageBoundary(
           entityType: 'VILLAGE_BOUNDARY',
           entityId: String(boundary.id),
           action: 'CREATE',
-          note: `Membuat batas wilayah baru (sumber=${input.sourceType}, status=${safeStatus})`,
+          note: `Membuat batas ${boundaryRole === 'NEIGHBOR_VILLAGE' ? 'desa sebelah' : 'desa utama'} "${villageName}" (sumber=${input.sourceType}, status=${safeStatus})`,
           actorId: actor.userId,
           actorName: actor.userName
         }
@@ -884,27 +1039,7 @@ export async function createVillageBoundary(
       return boundary;
     });
 
-    return {
-      id: String(created.id),
-      villageId: created.villageId ?? null,
-      regionCode: created.regionCode ?? null,
-      status: created.status as BoundaryVerificationStatus,
-      sourceType: created.sourceType as BoundarySourceType,
-      sourceName: created.sourceName ?? null,
-      sourceYear: created.sourceYear ?? null,
-      licenseNote: created.licenseNote ?? null,
-      geometryGeoJson: created.geometryGeoJson as GeoJsonPolygonGeometry,
-      bbox: parseBBox(created.bbox),
-      centroidLat: created.centroidLat,
-      centroidLng: created.centroidLng,
-      areaSqM: created.areaSqM,
-      perimeterMeters: created.perimeterMeters,
-      isActive: Boolean(created.isActive),
-      verifiedBy: created.verifiedBy ?? null,
-      verifiedAt: created.verifiedAt ? new Date(created.verifiedAt).toISOString() : null,
-      createdAt: created.createdAt ? new Date(created.createdAt).toISOString() : new Date().toISOString(),
-      updatedAt: created.updatedAt ? new Date(created.updatedAt).toISOString() : new Date().toISOString()
-    };
+    return mapBoundaryRecord(created, fallbackVillageName);
   }
 
   if (isJsonFallbackAllowed()) {
@@ -913,7 +1048,9 @@ export async function createVillageBoundary(
 
     if (shouldBeActive) {
       db.gisVillageBoundaries.forEach((b: any) => {
-        b.isActive = false;
+        if (b.boundaryRole !== 'NEIGHBOR_VILLAGE') {
+          b.isActive = false;
+        }
       });
     }
 
@@ -921,10 +1058,14 @@ export async function createVillageBoundary(
     const newBoundary: GisVillageBoundary = {
       id: `boundary-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       villageId: scopedVillageId,
+      villageName,
+      boundaryRole,
+      showOnMap,
+      fillColor,
       regionCode,
       status: safeStatus,
       sourceType: input.sourceType,
-      sourceName: input.sourceName ? String(input.sourceName).trim() : null,
+      sourceName: input.sourceName ? String(input.sourceName).trim() : villageName,
       sourceYear: typeof input.sourceYear === 'number' ? input.sourceYear : null,
       licenseNote: input.licenseNote ? String(input.licenseNote).trim() : null,
       geometryGeoJson,
@@ -951,15 +1092,31 @@ export async function createVillageBoundary(
       action: 'CREATE',
       actorId: actor.userId,
       actorName: actor.userName,
-      note: `Batas wilayah dibuat via JSON storage (${safeStatus})`,
+      note: `Batas wilayah "${villageName}" dibuat via JSON storage (${safeStatus})`,
       createdAt: nowIso
     });
 
     saveDb(db);
-    return newBoundary;
+    return mapBoundaryRecord(newBoundary, fallbackVillageName);
   }
 
   throw new Error('Database tidak siap untuk menyimpan batas wilayah desa.');
+}
+
+export async function createVillageBoundariesBatch(
+  inputs: CreateVillageBoundaryInput[],
+  actor: { userId: string; userName: string }
+): Promise<GisVillageBoundary[]> {
+  if (!Array.isArray(inputs) || inputs.length === 0) {
+    throw new Error('Daftar batas wilayah untuk diimpor tidak boleh kosong.');
+  }
+
+  const results: GisVillageBoundary[] = [];
+  for (const item of inputs) {
+    const saved = await createVillageBoundary(item, actor);
+    results.push(saved);
+  }
+  return results;
 }
 
 export async function updateVillageBoundary(
@@ -969,6 +1126,7 @@ export async function updateVillageBoundary(
 ): Promise<GisVillageBoundary> {
   const ctx = getCurrentTenantContext();
   const scopedVillageId = ctx?.tenantId || 'default';
+  const fallbackVillageName = ctx?.tenantName || 'Desa Pulau Betung';
 
   let parsedGeom: ReturnType<typeof validateAndParseGeoJsonPolygon> | null = null;
   if (input.geometryGeoJson) {
@@ -985,30 +1143,84 @@ export async function updateVillageBoundary(
         throw new Error('Data batas wilayah tidak ditemukan.');
       }
 
-      if (input.isActive) {
-        await (tx as any).gisVillageBoundary.updateMany({
-          where: isMultiTenantRoutingEnabled() ? { villageId: scopedVillageId } : {},
-          data: { isActive: false }
+      const existingMeta = extractBoundaryMeta(existing);
+      const nextRole: BoundaryRole =
+        input.boundaryRole !== undefined
+          ? input.boundaryRole === 'NEIGHBOR_VILLAGE'
+            ? 'NEIGHBOR_VILLAGE'
+            : 'MAIN_VILLAGE'
+          : existingMeta.boundaryRole || 'MAIN_VILLAGE';
+
+      const nextIsActive =
+        nextRole === 'NEIGHBOR_VILLAGE'
+          ? false
+          : input.isActive !== undefined
+          ? Boolean(input.isActive)
+          : Boolean(existing.isActive);
+
+      if (nextIsActive && nextRole === 'MAIN_VILLAGE') {
+        const currentRows = await (tx as any).gisVillageBoundary.findMany({
+          where: isMultiTenantRoutingEnabled() ? { villageId: scopedVillageId, isActive: true } : { isActive: true }
         });
+        for (const r of currentRows) {
+          if (r.id === id) continue;
+          const rMeta = extractBoundaryMeta(r);
+          if (rMeta.boundaryRole !== 'NEIGHBOR_VILLAGE') {
+            await (tx as any).gisVillageBoundary.update({
+              where: { id: r.id },
+              data: { isActive: false }
+            });
+          }
+        }
       }
 
-      const updateData: Record<string, unknown> = {};
+      const nextMeta: StoredBoundaryMeta = {
+        villageName:
+          input.villageName !== undefined
+            ? input.villageName
+              ? String(input.villageName).trim()
+              : null
+            : existingMeta.villageName,
+        boundaryRole: nextRole,
+        showOnMap:
+          input.showOnMap !== undefined
+            ? Boolean(input.showOnMap)
+            : nextRole === 'MAIN_VILLAGE' && input.isActive !== undefined
+            ? Boolean(input.isActive)
+            : existingMeta.showOnMap,
+        fillColor:
+          input.fillColor !== undefined
+            ? input.fillColor
+              ? String(input.fillColor).trim()
+              : null
+            : existingMeta.fillColor,
+        verificationNotes:
+          input.verificationNotes !== undefined
+            ? input.verificationNotes
+            : existingMeta.verificationNotes
+      };
+
+      const baseGeometry = parsedGeom
+        ? parsedGeom.geometryGeoJson
+        : sanitizeCleanGeometryGeoJson(existing.geometryGeoJson);
+
+      const updateData: Record<string, unknown> = {
+        geometryGeoJson: attachBoundaryMeta(baseGeometry, nextMeta),
+        isActive: nextIsActive
+      };
       if (input.regionCode !== undefined) updateData.regionCode = input.regionCode;
       if (input.sourceType !== undefined) updateData.sourceType = input.sourceType;
       if (input.sourceName !== undefined) updateData.sourceName = input.sourceName;
       if (input.sourceYear !== undefined) updateData.sourceYear = input.sourceYear;
       if (input.licenseNote !== undefined) updateData.licenseNote = input.licenseNote;
-      if (input.isActive !== undefined) updateData.isActive = Boolean(input.isActive);
 
       if (parsedGeom) {
-        updateData.geometryGeoJson = parsedGeom.geometryGeoJson;
         updateData.centroidLat = parsedGeom.centroidLat;
         updateData.centroidLng = parsedGeom.centroidLng;
         updateData.bbox = parsedGeom.bbox;
         updateData.areaSqM = parsedGeom.areaSqM;
         updateData.perimeterMeters = parsedGeom.perimeterMeters;
 
-        // Jika geometri diubah, status verifikasi direset ke PERLU_VERIFIKASI
         if (existing.status === 'TERVERIFIKASI') {
           updateData.status = 'PERLU_VERIFIKASI';
           updateData.verifiedBy = null;
@@ -1029,33 +1241,14 @@ export async function updateVillageBoundary(
           action: 'UPDATE',
           actorId: actor.userId,
           actorName: actor.userName,
-          note: `Memperbarui data batas wilayah (${row.sourceType})`
+          note: `Memperbarui data batas wilayah "${nextMeta.villageName || row.sourceName || id}" (${row.sourceType})`
         }
       });
 
       return row;
     });
 
-    return {
-      id: String(updated.id),
-      villageId: updated.villageId ?? null,
-      regionCode: updated.regionCode ?? null,
-      status: updated.status as BoundaryVerificationStatus,
-      sourceType: updated.sourceType as BoundarySourceType,
-      sourceName: updated.sourceName ?? null,
-      sourceYear: updated.sourceYear ?? null,
-      licenseNote: updated.licenseNote ?? null,
-      geometryGeoJson: updated.geometryGeoJson as GeoJsonPolygonGeometry,
-      bbox: parseBBox(updated.bbox),
-      centroidLat: updated.centroidLat,
-      centroidLng: updated.centroidLng,
-      areaSqM: updated.areaSqM,
-      perimeterMeters: updated.perimeterMeters,
-      isActive: Boolean(updated.isActive),
-      verifiedBy: updated.verifiedBy ?? null,
-      verifiedAt: updated.verifiedAt ? new Date(updated.verifiedAt).toISOString() : null,
-      updatedAt: updated.updatedAt ? new Date(updated.updatedAt).toISOString() : new Date().toISOString()
-    };
+    return mapBoundaryRecord(updated, fallbackVillageName);
   }
 
   if (isJsonFallbackAllowed()) {
@@ -1066,13 +1259,31 @@ export async function updateVillageBoundary(
       throw new Error('Data batas wilayah tidak ditemukan.');
     }
 
-    if (input.isActive) {
+    const current = db.gisVillageBoundaries[idx];
+    const nextRole: BoundaryRole =
+      input.boundaryRole !== undefined
+        ? input.boundaryRole === 'NEIGHBOR_VILLAGE'
+          ? 'NEIGHBOR_VILLAGE'
+          : 'MAIN_VILLAGE'
+        : current.boundaryRole === 'NEIGHBOR_VILLAGE'
+        ? 'NEIGHBOR_VILLAGE'
+        : 'MAIN_VILLAGE';
+
+    const nextIsActive =
+      nextRole === 'NEIGHBOR_VILLAGE'
+        ? false
+        : input.isActive !== undefined
+        ? Boolean(input.isActive)
+        : Boolean(current.isActive);
+
+    if (nextIsActive && nextRole === 'MAIN_VILLAGE') {
       db.gisVillageBoundaries.forEach((b: any) => {
-        b.isActive = false;
+        if (b.id !== id && b.boundaryRole !== 'NEIGHBOR_VILLAGE') {
+          b.isActive = false;
+        }
       });
     }
 
-    const current = db.gisVillageBoundaries[idx];
     const nowIso = new Date().toISOString();
 
     let newStatus = current.status;
@@ -1087,16 +1298,37 @@ export async function updateVillageBoundary(
 
     const updated: GisVillageBoundary = {
       ...current,
+      villageName:
+        input.villageName !== undefined
+          ? input.villageName
+            ? String(input.villageName).trim()
+            : null
+          : current.villageName,
+      boundaryRole: nextRole,
+      showOnMap:
+        input.showOnMap !== undefined
+          ? Boolean(input.showOnMap)
+          : nextRole === 'MAIN_VILLAGE' && input.isActive !== undefined
+          ? Boolean(input.isActive)
+          : current.showOnMap,
+      fillColor:
+        input.fillColor !== undefined
+          ? input.fillColor
+            ? String(input.fillColor).trim()
+            : null
+          : current.fillColor,
       regionCode: input.regionCode !== undefined ? input.regionCode : current.regionCode,
       sourceType: input.sourceType !== undefined ? input.sourceType : current.sourceType,
       sourceName: input.sourceName !== undefined ? input.sourceName : current.sourceName,
       sourceYear: input.sourceYear !== undefined ? input.sourceYear : current.sourceYear,
       licenseNote: input.licenseNote !== undefined ? input.licenseNote : current.licenseNote,
-      isActive: input.isActive !== undefined ? Boolean(input.isActive) : current.isActive,
+      verificationNotes:
+        input.verificationNotes !== undefined ? input.verificationNotes : current.verificationNotes,
+      isActive: nextIsActive,
       status: newStatus,
       verifiedBy,
       verifiedAt,
-      geometryGeoJson: parsedGeom ? parsedGeom.geometryGeoJson : current.geometryGeoJson,
+      geometryGeoJson: parsedGeom ? parsedGeom.geometryGeoJson : sanitizeCleanGeometryGeoJson(current.geometryGeoJson),
       centroidLat: parsedGeom ? parsedGeom.centroidLat : current.centroidLat,
       centroidLng: parsedGeom ? parsedGeom.centroidLng : current.centroidLng,
       bbox: parsedGeom ? parsedGeom.bbox : current.bbox,
@@ -1107,7 +1339,7 @@ export async function updateVillageBoundary(
 
     db.gisVillageBoundaries[idx] = updated;
     saveDb(db);
-    return updated;
+    return mapBoundaryRecord(updated, fallbackVillageName);
   }
 
   throw new Error('Database tidak siap untuk memperbarui batas wilayah.');
@@ -1126,6 +1358,7 @@ export async function verifyVillageBoundary(
 
   const ctx = getCurrentTenantContext();
   const scopedVillageId = ctx?.tenantId || 'default';
+  const fallbackVillageName = ctx?.tenantName || 'Desa Pulau Betung';
   const now = new Date();
 
   const dbAvailable = await isDatabaseAvailableCached();
@@ -1136,10 +1369,17 @@ export async function verifyVillageBoundary(
       const existing = await (tx as any).gisVillageBoundary.findUnique({ where: { id } });
       if (!existing) throw new Error('Data batas wilayah tidak ditemukan.');
 
+      const existingMeta = extractBoundaryMeta(existing);
+      const updatedGeo = attachBoundaryMeta(sanitizeCleanGeometryGeoJson(existing.geometryGeoJson), {
+        ...existingMeta,
+        verificationNotes: notes !== null ? notes : existingMeta.verificationNotes
+      });
+
       const row = await (tx as any).gisVillageBoundary.update({
         where: { id },
         data: {
           status,
+          geometryGeoJson: updatedGeo,
           verifiedBy: status === 'TERVERIFIKASI' ? actor.userName : null,
           verifiedAt: status === 'TERVERIFIKASI' ? now : null
         }
@@ -1160,26 +1400,7 @@ export async function verifyVillageBoundary(
       return row;
     });
 
-    return {
-      id: String(updated.id),
-      villageId: updated.villageId ?? null,
-      regionCode: updated.regionCode ?? null,
-      status: updated.status as BoundaryVerificationStatus,
-      sourceType: updated.sourceType as BoundarySourceType,
-      sourceName: updated.sourceName ?? null,
-      sourceYear: updated.sourceYear ?? null,
-      licenseNote: updated.licenseNote ?? null,
-      geometryGeoJson: updated.geometryGeoJson as GeoJsonPolygonGeometry,
-      bbox: parseBBox(updated.bbox),
-      centroidLat: updated.centroidLat,
-      centroidLng: updated.centroidLng,
-      areaSqM: updated.areaSqM,
-      perimeterMeters: updated.perimeterMeters,
-      isActive: Boolean(updated.isActive),
-      verifiedBy: updated.verifiedBy ?? null,
-      verifiedAt: updated.verifiedAt ? new Date(updated.verifiedAt).toISOString() : null,
-      updatedAt: updated.updatedAt ? new Date(updated.updatedAt).toISOString() : new Date().toISOString()
-    };
+    return mapBoundaryRecord(updated, fallbackVillageName);
   }
 
   if (isJsonFallbackAllowed()) {
@@ -1214,7 +1435,7 @@ export async function verifyVillageBoundary(
     });
 
     saveDb(db);
-    return updated;
+    return mapBoundaryRecord(updated, fallbackVillageName);
   }
 
   throw new Error('Database tidak siap untuk memperbarui status verifikasi.');
@@ -1226,20 +1447,40 @@ export async function setActiveVillageBoundary(
 ): Promise<GisVillageBoundary> {
   const ctx = getCurrentTenantContext();
   const scopedVillageId = ctx?.tenantId || 'default';
+  const fallbackVillageName = ctx?.tenantName || 'Desa Pulau Betung';
 
   const dbAvailable = await isDatabaseAvailableCached();
   const tablesReady = dbAvailable ? await checkGisTablesReady() : false;
 
   if (dbAvailable && tablesReady) {
     const updated = await runWithTenantRlsTransaction(async (tx: PrismaClient) => {
-      await (tx as any).gisVillageBoundary.updateMany({
-        where: isMultiTenantRoutingEnabled() ? { villageId: scopedVillageId } : {},
-        data: { isActive: false }
+      const target = await (tx as any).gisVillageBoundary.findUnique({ where: { id } });
+      if (!target) throw new Error('Data batas wilayah tidak ditemukan.');
+
+      const currentRows = await (tx as any).gisVillageBoundary.findMany({
+        where: isMultiTenantRoutingEnabled() ? { villageId: scopedVillageId, isActive: true } : { isActive: true }
+      });
+      for (const r of currentRows) {
+        if (r.id === id) continue;
+        const rMeta = extractBoundaryMeta(r);
+        if (rMeta.boundaryRole !== 'NEIGHBOR_VILLAGE') {
+          await (tx as any).gisVillageBoundary.update({
+            where: { id: r.id },
+            data: { isActive: false }
+          });
+        }
+      }
+
+      const targetMeta = extractBoundaryMeta(target);
+      const updatedGeo = attachBoundaryMeta(sanitizeCleanGeometryGeoJson(target.geometryGeoJson), {
+        ...targetMeta,
+        boundaryRole: 'MAIN_VILLAGE',
+        showOnMap: true
       });
 
       const row = await (tx as any).gisVillageBoundary.update({
         where: { id },
-        data: { isActive: true }
+        data: { isActive: true, geometryGeoJson: updatedGeo }
       });
 
       await (tx as any).gisChangeLog.create({
@@ -1257,26 +1498,7 @@ export async function setActiveVillageBoundary(
       return row;
     });
 
-    return {
-      id: String(updated.id),
-      villageId: updated.villageId ?? null,
-      regionCode: updated.regionCode ?? null,
-      status: updated.status as BoundaryVerificationStatus,
-      sourceType: updated.sourceType as BoundarySourceType,
-      sourceName: updated.sourceName ?? null,
-      sourceYear: updated.sourceYear ?? null,
-      licenseNote: updated.licenseNote ?? null,
-      geometryGeoJson: updated.geometryGeoJson as GeoJsonPolygonGeometry,
-      bbox: parseBBox(updated.bbox),
-      centroidLat: updated.centroidLat,
-      centroidLng: updated.centroidLng,
-      areaSqM: updated.areaSqM,
-      perimeterMeters: updated.perimeterMeters,
-      isActive: true,
-      verifiedBy: updated.verifiedBy ?? null,
-      verifiedAt: updated.verifiedAt ? new Date(updated.verifiedAt).toISOString() : null,
-      updatedAt: updated.updatedAt ? new Date(updated.updatedAt).toISOString() : new Date().toISOString()
-    };
+    return mapBoundaryRecord(updated, fallbackVillageName);
   }
 
   if (isJsonFallbackAllowed()) {
@@ -1286,13 +1508,20 @@ export async function setActiveVillageBoundary(
     if (idx === -1) throw new Error('Data batas wilayah tidak ditemukan.');
 
     db.gisVillageBoundaries.forEach((b: any) => {
-      b.isActive = b.id === id;
-      b.updatedAt = new Date().toISOString();
+      if (b.id === id) {
+        b.isActive = true;
+        b.boundaryRole = 'MAIN_VILLAGE';
+        b.showOnMap = true;
+        b.updatedAt = new Date().toISOString();
+      } else if (b.boundaryRole !== 'NEIGHBOR_VILLAGE') {
+        b.isActive = false;
+        b.updatedAt = new Date().toISOString();
+      }
     });
 
     const activeOne = db.gisVillageBoundaries[idx];
     saveDb(db);
-    return activeOne;
+    return mapBoundaryRecord(activeOne, fallbackVillageName);
   }
 
   throw new Error('Database tidak siap untuk mengatur batas wilayah aktif.');
@@ -1351,4 +1580,69 @@ export async function deleteVillageBoundary(
 
   return false;
 }
+
+export interface GisChangeLogEntry {
+  id: string;
+  villageId?: string | null;
+  entityType: string;
+  entityId: string;
+  action: string;
+  actorId?: string | null;
+  actorName?: string | null;
+  note?: string | null;
+  createdAt: string;
+}
+
+export async function getGisChangeLogs(limit = 50): Promise<GisChangeLogEntry[]> {
+  const ctx = getCurrentTenantContext();
+  const scopedVillageId = ctx?.tenantId || 'default';
+
+  const dbAvailable = await isDatabaseAvailableCached();
+  const tablesReady = dbAvailable ? await checkGisTablesReady() : false;
+
+  if (dbAvailable && tablesReady) {
+    try {
+      const prisma = getPrisma();
+      const rows = await (prisma as any).gisChangeLog.findMany({
+        where: isMultiTenantRoutingEnabled() ? { villageId: scopedVillageId } : {},
+        orderBy: { createdAt: 'desc' },
+        take: limit
+      });
+      return rows.map((r: any) => ({
+        id: String(r.id),
+        villageId: r.villageId ?? null,
+        entityType: String(r.entityType || 'GIS'),
+        entityId: String(r.entityId || ''),
+        action: String(r.action || ''),
+        actorId: r.actorId ?? null,
+        actorName: r.actorName ?? null,
+        note: r.note ?? null,
+        createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : new Date().toISOString()
+      }));
+    } catch (err) {
+      if (!isMissingGisSchemaError(err)) {
+        console.warn('⚠️ [GIS-REPO] Gagal mengambil log perubahan GIS:', sanitizeDiagnosticMessage(String(err)));
+      }
+    }
+  }
+
+  if (isJsonFallbackAllowed()) {
+    const db = getDb();
+    const logs = Array.isArray(db.gisChangeLogs) ? db.gisChangeLogs : [];
+    return logs.slice(0, limit).map((r: any) => ({
+      id: String(r.id),
+      villageId: r.villageId ?? null,
+      entityType: String(r.entityType || 'GIS'),
+      entityId: String(r.entityId || ''),
+      action: String(r.action || ''),
+      actorId: r.actorId ?? r.changedBy ?? null,
+      actorName: r.actorName ?? r.changedByName ?? null,
+      note: r.note ?? null,
+      createdAt: r.createdAt || new Date().toISOString()
+    }));
+  }
+
+  return [];
+}
+
 

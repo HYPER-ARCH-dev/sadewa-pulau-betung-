@@ -303,3 +303,81 @@ export function escapeHtml(value: unknown): string {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
+
+export function normalizeCoordinatePair(coords: unknown): [number, number] | null {
+  if (!Array.isArray(coords) || coords.length < 2) return null;
+  const lat = Number(coords[0]);
+  const lng = Number(coords[1]);
+  return isValidCoordinatePair(lat, lng) ? [lat, lng] : null;
+}
+
+export interface OffsetMarkerItem<T> {
+  item: T;
+  lat: number;
+  lng: number;
+  displayLat: number;
+  displayLng: number;
+  isOffset: boolean;
+}
+
+/**
+ * Memberi micro-offset khusus tampilan (display-only) bagi pin fasilitas yang
+ * berada pada titik sama atau sangat berdekatan (<= ~5 meter), tanpa mengubah
+ * koordinat tersimpan pada database maupun navigasi GPS.
+ */
+export function applyDisplayOverlapOffsets<T extends { coordinates?: [number, number] | null }>(
+  items: T[]
+): OffsetMarkerItem<T>[] {
+  const validItems: { item: T; lat: number; lng: number }[] = [];
+  for (const item of items) {
+    const pair = normalizeCoordinatePair(item.coordinates);
+    if (pair) {
+      validItems.push({ item, lat: pair[0], lng: pair[1] });
+    }
+  }
+
+  // Kelompokkan pin yang jaraknya sangat berdekatan (~<= 11 meter)
+  const clusters: { item: T; lat: number; lng: number }[][] = [];
+  for (const entry of validItems) {
+    const match = clusters.find((cluster) => {
+      const anchor = cluster[0];
+      return Math.abs(anchor.lat - entry.lat) <= 0.0001 && Math.abs(anchor.lng - entry.lng) <= 0.0001;
+    });
+    if (match) {
+      match.push(entry);
+    } else {
+      clusters.push([entry]);
+    }
+  }
+
+  const result: OffsetMarkerItem<T>[] = [];
+  const radiusDeg = 0.000055; // ~6 meter hanya untuk pemisahan visual pin
+
+  for (const cluster of clusters) {
+    if (cluster.length === 1) {
+      const only = cluster[0];
+      result.push({
+        item: only.item,
+        lat: only.lat,
+        lng: only.lng,
+        displayLat: only.lat,
+        displayLng: only.lng,
+        isOffset: false
+      });
+    } else {
+      cluster.forEach((entry, idx) => {
+        const angle = (2 * Math.PI * idx) / cluster.length;
+        result.push({
+          item: entry.item,
+          lat: entry.lat,
+          lng: entry.lng,
+          displayLat: entry.lat + radiusDeg * Math.cos(angle),
+          displayLng: entry.lng + radiusDeg * Math.sin(angle),
+          isOffset: true
+        });
+      });
+    }
+  }
+
+  return result;
+}

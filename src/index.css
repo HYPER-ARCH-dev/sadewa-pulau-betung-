@@ -425,3 +425,32 @@
   }
 }
 
+/* =========================================================================
+ * WEBGIS MAP LABELS - NON-BLOCKING & CONTAINER-FREE
+ * ========================================================================= */
+.gis-boundary-clean-label {
+  background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  pointer-events: none !important;
+}
+.gis-boundary-clean-label::before,
+.gis-boundary-clean-label::after {
+  display: none !important;
+}
+
+.dusun-label-tooltip {
+  background: rgba(255, 255, 255, 0.88) !important;
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(203, 213, 225, 0.8) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06) !important;
+  padding: 2px 6px !important;
+}
+.dusun-label-tooltip::before,
+.dusun-label-tooltip::after {
+  display: none !important;
+}
+

@@ -1,9 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { useApp } from '../../context/AppContext';
-import { LandParcel, DusunSpatialBoundary, MapMode } from '../../types/webgis';
+import { LandParcel, DusunSpatialBoundary, GisVillageBoundary, MapMode } from '../../types/webgis';
 import { MapFacility } from '../../types';
 import { calculatePolygonAreaShoelace } from '../../utils/geometryEngine';
 import {
@@ -11,11 +11,22 @@ import {
   MAP_MODE_OPTIONS
 } from '../../config/mapProviderRegistry';
 import {
+  applyDisplayOverlapOffsets,
   geoJsonGeometryToLeafletPolygons,
-  isValidCoordinatePair,
   resolveMapViewport
 } from '../../utils/gisAdapter';
-import { Navigation, Compass, Trash2, Info } from 'lucide-react';
+import {
+  Navigation,
+  Compass,
+  Trash2,
+  Info,
+  Maximize2,
+  Minimize2,
+  X,
+  Printer,
+  Send,
+  ExternalLink
+} from 'lucide-react';
 
 // Fix Leaflet Default Icon path issues in Vite
 delete (L.Icon.Default.prototype as { _getIconUrl?: unknown })._getIconUrl;
@@ -28,12 +39,17 @@ L.Icon.Default.mergeOptions({
 interface WebGisMapProps {
   parcels: LandParcel[];
   dusunBoundaries: DusunSpatialBoundary[];
+  villageBoundaries?: GisVillageBoundary[];
   facilities?: MapFacility[];
   selectedParcelId?: string | null;
   onSelectParcel?: (parcel: LandParcel | null) => void;
   isDrawingMode?: boolean;
+  onToggleDrawingMode?: () => void;
   drawingPoints?: [number, number][];
   onDrawingPointsChange?: (points: [number, number][]) => void;
+  onPrintReceipt?: (parcel: LandParcel) => void;
+  onTriggerSporadik?: (parcel: LandParcel) => void;
+  onNavigateSporadik?: (trackingCode: string) => void;
   height?: string;
   className?: string;
 }
@@ -124,22 +140,29 @@ function buildParcelPopupElement(
 export const WebGisMap: React.FC<WebGisMapProps> = ({
   parcels,
   dusunBoundaries,
+  villageBoundaries,
   facilities = [],
   selectedParcelId = null,
   onSelectParcel,
   isDrawingMode = false,
+  onToggleDrawingMode,
   drawingPoints = [],
   onDrawingPointsChange,
+  onPrintReceipt,
+  onTriggerSporadik,
+  onNavigateSporadik,
   height = '500px',
   className = ''
 }) => {
   const { villageProfile, gisBootstrap } = useApp();
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const basemapCleanupRef = useRef<(() => void) | null>(null);
   const layersGroupRef = useRef<L.LayerGroup | null>(null);
   const drawingLayerRef = useRef<L.LayerGroup | null>(null);
   const lastViewportKeyRef = useRef<string>('');
+  const nativeFullscreenActiveRef = useRef<boolean>(false);
 
   const [mapMode, setMapMode] = useState<MapMode>(
     gisBootstrap?.config?.defaultMapMode || 'roadmap'
@@ -148,18 +171,124 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
   const [showVillageBounds, setShowVillageBounds] = useState<boolean>(
     gisBootstrap?.config?.showVillageBoundary ?? true
   );
+  const [showNeighborBounds, setShowNeighborBounds] = useState(true);
   const [showDusunBounds, setShowDusunBounds] = useState(true);
   const [showFacilities, setShowFacilities] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showFullscreenParcelPanel, setShowFullscreenParcelPanel] = useState(false);
+
+  const activeSelectedParcel = useMemo(
+    () => parcels.find((p) => p.id === selectedParcelId) || null,
+    [parcels, selectedParcelId]
+  );
+
+  const handleParcelPolygonSelect = useCallback(
+    (parcel: LandParcel | null) => {
+      onSelectParcel?.(parcel);
+      if (parcel) {
+        setShowFullscreenParcelPanel(true);
+      }
+    },
+    [onSelectParcel]
+  );
+
+  const enterFullscreen = useCallback(async () => {
+    setIsFullscreen(true);
+    const el = wrapperRef.current as
+      | (HTMLDivElement & { webkitRequestFullscreen?: () => Promise<void> | void })
+      | null;
+    if (!el) return;
+    try {
+      if (typeof el.requestFullscreen === 'function') {
+        await el.requestFullscreen();
+        nativeFullscreenActiveRef.current = true;
+      } else if (typeof el.webkitRequestFullscreen === 'function') {
+        await el.webkitRequestFullscreen();
+        nativeFullscreenActiveRef.current = true;
+      }
+    } catch {
+      nativeFullscreenActiveRef.current = false;
+    }
+  }, []);
+
+  const exitFullscreen = useCallback(async () => {
+    setIsFullscreen(false);
+    const doc = document as Document & { webkitExitFullscreen?: () => Promise<void> | void };
+    try {
+      if (document.fullscreenElement) {
+        nativeFullscreenActiveRef.current = false;
+        await document.exitFullscreen();
+      } else if (doc.webkitExitFullscreen && nativeFullscreenActiveRef.current) {
+        nativeFullscreenActiveRef.current = false;
+        await doc.webkitExitFullscreen();
+      }
+    } catch {
+      nativeFullscreenActiveRef.current = false;
+    }
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (isFullscreen) {
+      void exitFullscreen();
+    } else {
+      void enterFullscreen();
+    }
+  }, [isFullscreen, enterFullscreen, exitFullscreen]);
+
+  const activeFacilities = useMemo(
+    () => facilities.filter((f) => f.isActive !== false),
+    [facilities]
+  );
+
+  const visibleBoundaryList = useMemo(() => {
+    if (Array.isArray(villageBoundaries)) {
+      return villageBoundaries;
+    }
+    if (gisBootstrap?.visibleBoundaries && gisBootstrap.visibleBoundaries.length > 0) {
+      return gisBootstrap.visibleBoundaries;
+    }
+    return gisBootstrap?.activeBoundary ? [gisBootstrap.activeBoundary] : [];
+  }, [villageBoundaries, gisBootstrap?.visibleBoundaries, gisBootstrap?.activeBoundary]);
+
+  const hasMainBoundary = useMemo(
+    () => visibleBoundaryList.some((b) => b.boundaryRole !== 'NEIGHBOR_VILLAGE'),
+    [visibleBoundaryList]
+  );
+
+  const hasNeighborBoundary = useMemo(
+    () => visibleBoundaryList.some((b) => b.boundaryRole === 'NEIGHBOR_VILLAGE'),
+    [visibleBoundaryList]
+  );
+
+  const neighborBoundary = useMemo(
+    () => visibleBoundaryList.find((b) => b.boundaryRole === 'NEIGHBOR_VILLAGE'),
+    [visibleBoundaryList]
+  );
+
+  const neighborAreaFormatted = useMemo(() => {
+    if (!neighborBoundary) return '';
+    if (typeof neighborBoundary.areaSqM === 'number' && neighborBoundary.areaSqM > 0) {
+      return `${(neighborBoundary.areaSqM / 10000).toLocaleString('id-ID', { maximumFractionDigits: 1 })} Ha`;
+    }
+    if (neighborBoundary.geometryGeoJson) {
+      const polys = geoJsonGeometryToLeafletPolygons(neighborBoundary.geometryGeoJson);
+      if (polys.length > 0 && polys[0].length > 0 && polys[0][0].length >= 3) {
+        const calc = calculatePolygonAreaShoelace(polys[0][0]);
+        if (calc.areaHectares > 0) return calc.formattedAreaHectares;
+      }
+    }
+    return '';
+  }, [neighborBoundary]);
 
   const viewport = useMemo(
     () =>
       resolveMapViewport({
         gisBootstrap,
         villageProfile,
-        facilities,
+        facilities: activeFacilities,
         parcels
       }),
-    [gisBootstrap, villageProfile, facilities, parcels]
+    [gisBootstrap, villageProfile, activeFacilities, parcels]
   );
 
   useEffect(() => {
@@ -171,7 +300,7 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
     }
   }, [gisBootstrap?.config?.defaultMapMode, gisBootstrap?.config?.showVillageBoundary]);
 
-  // Inisialisasi Peta Leaflet
+  // Inisialisasi Peta Leaflet (single instance sepanjang lifecycle)
   useEffect(() => {
     if (!mapContainerRef.current) return;
     if (mapInstanceRef.current) return;
@@ -191,11 +320,26 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
     layersGroupRef.current = layersGroup;
     drawingLayerRef.current = drawingLayer;
 
-    setTimeout(() => {
-      map.invalidateSize();
+    const initTimer = window.setTimeout(() => {
+      map.invalidateSize({ animate: false });
     }, 200);
 
+    let resizeRaf = 0;
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && mapContainerRef.current) {
+      resizeObserver = new ResizeObserver(() => {
+        if (resizeRaf) window.cancelAnimationFrame(resizeRaf);
+        resizeRaf = window.requestAnimationFrame(() => {
+          map.invalidateSize({ animate: false });
+        });
+      });
+      resizeObserver.observe(mapContainerRef.current);
+    }
+
     return () => {
+      window.clearTimeout(initTimer);
+      if (resizeRaf) window.cancelAnimationFrame(resizeRaf);
+      resizeObserver?.disconnect();
       if (basemapCleanupRef.current) {
         basemapCleanupRef.current();
         basemapCleanupRef.current = null;
@@ -206,6 +350,66 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
       drawingLayerRef.current = null;
     };
   }, []);
+
+  // Sinkronisasi native fullscreenchange, tombol ESC, dan body scroll lock
+  useEffect(() => {
+    const handleFsChange = () => {
+      const doc = document as Document & { webkitFullscreenElement?: Element | null };
+      const fsEl = document.fullscreenElement || doc.webkitFullscreenElement || null;
+      if (!fsEl && nativeFullscreenActiveRef.current) {
+        nativeFullscreenActiveRef.current = false;
+        setIsFullscreen(false);
+      }
+    };
+    document.addEventListener('fullscreenchange', handleFsChange);
+    document.addEventListener('webkitfullscreenchange', handleFsChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFsChange);
+      document.removeEventListener('webkitfullscreenchange', handleFsChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        void exitFullscreen();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isFullscreen, exitFullscreen]);
+
+  // Sinkronisasi ukuran container Leaflet saat transisi normal <-> fullscreen
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    let raf1 = 0;
+    let raf2 = 0;
+    raf1 = window.requestAnimationFrame(() => {
+      raf2 = window.requestAnimationFrame(() => {
+        map.invalidateSize({ animate: false });
+      });
+    });
+
+    const settleTimer = window.setTimeout(() => {
+      map.invalidateSize({ animate: false });
+    }, 180);
+
+    return () => {
+      if (raf1) window.cancelAnimationFrame(raf1);
+      if (raf2) window.cancelAnimationFrame(raf2);
+      window.clearTimeout(settleTimer);
+    };
+  }, [isFullscreen, height]);
 
   // Switch Base Layer melalui mapProviderRegistry
   useEffect(() => {
@@ -330,26 +534,72 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
 
     layersGroup.clearLayers();
 
-    // 0. Batas Wilayah Desa Aktif (jika tersedia)
-    if (showVillageBounds && gisBootstrap?.activeBoundary?.geometryGeoJson) {
-      const polygons = geoJsonGeometryToLeafletPolygons(gisBootstrap.activeBoundary.geometryGeoJson);
-      const boundaryColor = gisBootstrap.config?.boundaryColor || '#ec4899';
-      polygons.forEach((rings) => {
+    // 0. Batas Wilayah Desa Utama & Desa Sebelah (jika tersedia)
+    visibleBoundaryList.forEach((boundary) => {
+      if (!boundary.geometryGeoJson) return;
+      const isNeighbor = boundary.boundaryRole === 'NEIGHBOR_VILLAGE';
+      if (isNeighbor && !showNeighborBounds) return;
+      if (!isNeighbor && !showVillageBounds) return;
+
+      const polygons = geoJsonGeometryToLeafletPolygons(boundary.geometryGeoJson);
+      const strokeColor =
+        boundary.fillColor ||
+        (isNeighbor ? '#0284c7' : gisBootstrap?.config?.boundaryColor || '#ec4899');
+      const displayName =
+        boundary.villageName ||
+        boundary.sourceName ||
+        (isNeighbor ? 'Desa Tetangga' : villageProfile.villageName || 'Desa');
+
+      polygons.forEach((rings, ringIdx) => {
         const villagePoly = L.polygon(rings, {
-          color: boundaryColor,
-          weight: 3,
-          dashArray: '8, 5',
-          fillColor: boundaryColor,
-          fillOpacity: 0.06
+          color: strokeColor,
+          weight: isNeighbor ? 2.2 : 3,
+          dashArray: isNeighbor ? '5, 5' : '8, 5',
+          fillColor: strokeColor,
+          fillOpacity: isNeighbor ? 0.1 : 0.06
         });
+
+        let ringAreaStr = '';
+        if (typeof boundary.areaSqM === 'number' && boundary.areaSqM > 0) {
+          ringAreaStr = `${(boundary.areaSqM / 10000).toLocaleString('id-ID', { maximumFractionDigits: 1 })} Ha`;
+        } else if (rings.length > 0 && rings[0].length >= 3) {
+          const calc = calculatePolygonAreaShoelace(rings[0]);
+          if (calc.areaHectares > 0) ringAreaStr = calc.formattedAreaHectares;
+        }
+
         const tip = document.createElement('div');
+        tip.className = 'font-sans text-xs text-slate-800 p-1';
         const tipTitle = document.createElement('strong');
-        tipTitle.textContent = `Batas Wilayah ${villageProfile.villageName || 'Desa'}`;
+        tipTitle.className = 'text-xs font-bold text-slate-900 block';
+        tipTitle.textContent = displayName;
         tip.appendChild(tipTitle);
+
+        if (ringAreaStr) {
+          const areaDiv = document.createElement('div');
+          areaDiv.className = 'text-[11px] font-semibold text-emerald-700 mt-0.5';
+          areaDiv.textContent = `Luas Wilayah: ${ringAreaStr}`;
+          tip.appendChild(areaDiv);
+        }
+
         villagePoly.bindTooltip(tip, { sticky: true });
+
+        // Label teks luas di peta: TANPA kontainer kotak (transparan, tidak menghalangi peta atau poligon)
+        if (ringIdx === 0 && ringAreaStr) {
+          const cleanLabelEl = document.createElement('div');
+          cleanLabelEl.className = 'gis-boundary-clean-label';
+          cleanLabelEl.innerHTML = `<span style="font-weight: 800; font-size: 11px; color: ${strokeColor}; text-shadow: 0 0 3px #ffffff, 0 0 6px #ffffff, 0 0 9px #ffffff, 1px 1px 0 #ffffff, -1px -1px 0 #ffffff; white-space: nowrap; pointer-events: none;">Luas: ${ringAreaStr}</span>`;
+
+          villagePoly.bindTooltip(cleanLabelEl, {
+            permanent: true,
+            direction: 'top',
+            className: 'gis-boundary-clean-label',
+            offset: [0, -8]
+          });
+        }
+
         layersGroup.addLayer(villagePoly);
       });
-    }
+    });
 
     // 1. Batas Administrasi Dusun
     if (showDusunBounds && dusunBoundaries) {
@@ -418,24 +668,23 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
           fillOpacity: isSelected ? 0.6 : 0.35
         });
 
-        polygon.bindPopup(buildParcelPopupElement(parcel, onSelectParcel));
+        polygon.bindPopup(buildParcelPopupElement(parcel, handleParcelPolygonSelect));
 
         polygon.on('click', () => {
-          onSelectParcel?.(parcel);
+          handleParcelPolygonSelect(parcel);
         });
 
         layersGroup.addLayer(polygon);
       });
     }
 
-    // 3. Titik Fasilitas Umum
-    if (showFacilities && facilities) {
-      facilities.forEach((fac) => {
-        if (!fac.coordinates || !isValidCoordinatePair(fac.coordinates[0], fac.coordinates[1])) return;
-
-        const marker = L.circleMarker(fac.coordinates, {
+    // 3. Titik Fasilitas Umum (hanya fasilitas aktif, dengan micro-offset visual untuk titik bertumpuk)
+    if (showFacilities && activeFacilities.length > 0) {
+      const offsetFacilities = applyDisplayOverlapOffsets(activeFacilities);
+      offsetFacilities.forEach(({ item: fac, displayLat, displayLng }) => {
+        const marker = L.circleMarker([displayLat, displayLng], {
           radius: 7,
-          fillColor: '#3b82f6',
+          fillColor: fac.verificationStatus === 'TERVERIFIKASI' ? '#10b981' : '#3b82f6',
           color: '#ffffff',
           weight: 2,
           fillOpacity: 0.9
@@ -447,7 +696,15 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
         facName.textContent = fac.name;
         const facCat = document.createElement('div');
         facCat.className = 'text-[10px] text-slate-500';
-        facCat.textContent = fac.category;
+        const verLabel =
+          fac.verificationStatus === 'TERVERIFIKASI'
+            ? 'Terverifikasi'
+            : fac.verificationStatus === 'BELUM_TERVERIFIKASI'
+            ? 'Belum Terverifikasi'
+            : 'Perlu Verifikasi';
+        facCat.textContent = fac.plusCode
+          ? `${fac.category.replace(/_/g, ' ')} • ${verLabel} • ${fac.plusCode}`
+          : `${fac.category.replace(/_/g, ' ')} • ${verLabel}`;
         facTip.appendChild(facName);
         facTip.appendChild(facCat);
 
@@ -458,13 +715,15 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
   }, [
     parcels,
     dusunBoundaries,
-    facilities,
+    activeFacilities,
     selectedParcelId,
     showVillageBounds,
+    showNeighborBounds,
     showDusunBounds,
     showFacilities,
-    onSelectParcel,
-    gisBootstrap,
+    handleParcelPolygonSelect,
+    visibleBoundaryList,
+    gisBootstrap?.config?.boundaryColor,
     villageProfile.villageName
   ]);
 
@@ -482,11 +741,23 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
   };
 
   return (
-    <div className={`relative rounded-2xl overflow-hidden border border-slate-200/80 shadow-xs bg-slate-900 ${className}`}>
-      <div ref={mapContainerRef} style={{ height }} className="w-full z-0" />
+    <div
+      ref={wrapperRef}
+      data-fullscreen={isFullscreen ? 'true' : 'false'}
+      className={
+        isFullscreen
+          ? 'fixed inset-0 z-[9900] w-screen h-screen rounded-none border-0 bg-slate-900 overflow-hidden'
+          : `relative rounded-2xl overflow-hidden border border-slate-200/80 shadow-xs bg-slate-900 ${className}`
+      }
+    >
+      <div
+        ref={mapContainerRef}
+        style={{ height: isFullscreen ? '100%' : height }}
+        className="w-full h-full z-0"
+      />
 
       {/* Control Panel Atas Kiri: Switch Mode Peta & Layer Toggle */}
-      <div className="absolute top-3 left-3 z-[1000] flex flex-wrap items-center gap-2 max-w-[calc(100%-4rem)]">
+      <div className="absolute top-3 left-3 z-[1000] flex flex-wrap items-center gap-2 max-w-[calc(100%-12rem)]">
         <div className="bg-white/95 backdrop-blur-md p-1 rounded-xl shadow-md border border-slate-200/80 flex flex-wrap items-center gap-1">
           {MAP_MODE_OPTIONS.map((opt) => (
             <button
@@ -505,7 +776,7 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
         </div>
 
         <div className="bg-white/95 backdrop-blur-md px-2.5 py-1.5 rounded-xl shadow-md border border-slate-200/80 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-700">
-          {gisBootstrap?.activeBoundary && (
+          {hasMainBoundary && (
             <>
               <label className="flex items-center gap-1.5 cursor-pointer">
                 <input
@@ -515,6 +786,20 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
                   className="rounded border-slate-300 text-pink-600 focus:ring-pink-500 w-3.5 h-3.5"
                 />
                 <span>Batas Desa</span>
+              </label>
+              <span className="text-slate-300">|</span>
+            </>
+          )}
+          {hasNeighborBoundary && (
+            <>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showNeighborBounds}
+                  onChange={(e) => setShowNeighborBounds(e.target.checked)}
+                  className="rounded border-slate-300 text-sky-600 focus:ring-sky-500 w-3.5 h-3.5"
+                />
+                <span>{neighborAreaFormatted ? `Batas (${neighborAreaFormatted})` : 'Batas Wilayah'}</span>
               </label>
               <span className="text-slate-300">|</span>
             </>
@@ -548,8 +833,46 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
         </div>
       )}
 
-      {/* Control Panel Atas Kanan: Reset Position */}
-      <div className="absolute top-3 right-3 z-[1000]">
+      {/* Control Panel Atas Kanan: Mode Digitasi (Fullscreen), Fullscreen Toggle & Reset Position */}
+      <div className="absolute top-3 right-3 z-[1000] flex items-center gap-2">
+        {isFullscreen && onToggleDrawingMode && (
+          <button
+            type="button"
+            onClick={onToggleDrawingMode}
+            className={`px-3 py-2 rounded-xl text-xs font-bold shadow-md border transition-colors flex items-center gap-1.5 ${
+              isDrawingMode
+                ? 'bg-red-600 hover:bg-red-700 text-white border-red-700'
+                : 'bg-white/95 hover:bg-white text-slate-700 border-slate-200'
+            }`}
+            title={isDrawingMode ? 'Selesai Digitasi GPS' : 'Aktifkan Mode Digitasi GPS'}
+          >
+            <Compass className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">
+              {isDrawingMode ? 'Selesai Digitasi' : 'Mode Digitasi GPS'}
+            </span>
+          </button>
+        )}
+
+        <button
+          type="button"
+          onClick={toggleFullscreen}
+          aria-pressed={isFullscreen}
+          className="bg-white/95 hover:bg-white text-slate-800 px-3 py-2 rounded-xl shadow-md border border-slate-200 transition-colors flex items-center gap-1.5 text-xs font-bold"
+          title={isFullscreen ? 'Kecilkan Peta (ESC)' : 'Perbesar Peta ke Layar Penuh'}
+        >
+          {isFullscreen ? (
+            <>
+              <Minimize2 className="w-4 h-4 text-emerald-700" />
+              <span>Kecilkan Peta</span>
+            </>
+          ) : (
+            <>
+              <Maximize2 className="w-4 h-4 text-emerald-700" />
+              <span>Perbesar Peta</span>
+            </>
+          )}
+        </button>
+
         <button
           type="button"
           onClick={handleResetZoom}
@@ -610,8 +933,119 @@ export const WebGisMap: React.FC<WebGisMapProps> = ({
         </div>
       )}
 
+      {/* Panel Informasi Bidang Tanah Ringkas pada Mode Fullscreen */}
+      {isFullscreen && showFullscreenParcelPanel && activeSelectedParcel && (
+        <div
+          className={`absolute z-[1000] bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-slate-200/90 p-3.5 w-[calc(100%-1.5rem)] sm:w-80 font-sans text-xs ${
+            isDrawingMode ? 'top-16 right-3' : 'bottom-4 left-3'
+          }`}
+        >
+          <div className="flex items-start justify-between gap-2 pb-2 mb-2 border-b border-slate-200">
+            <div className="min-w-0">
+              <span className="text-[10px] font-extrabold text-emerald-700 uppercase tracking-wider block">
+                Panel Informasi Bidang Tanah
+              </span>
+              <h4 className="font-extrabold text-sm text-slate-900 truncate">
+                {activeSelectedParcel.ownerName}
+              </h4>
+              <span className="font-mono text-[11px] text-slate-500 block">
+                NOP: {activeSelectedParcel.nop}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowFullscreenParcelPanel(false)}
+              aria-label="Tutup panel informasi bidang tanah"
+              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors shrink-0"
+              title="Tutup panel informasi tanpa mengubah data"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200/70 mb-2.5">
+            <div>
+              <span className="text-[10px] text-slate-500 block">Dusun / Lokasi</span>
+              <strong className="text-slate-800 text-[11px] leading-snug block">
+                {activeSelectedParcel.addressDusun}
+              </strong>
+            </div>
+            <div>
+              <span className="text-[10px] text-slate-500 block">Luas Ukur</span>
+              <strong className="text-emerald-700 text-[11px] block">
+                {activeSelectedParcel.landAreaSqM.toLocaleString('id-ID')} m² ({activeSelectedParcel.landAreaHectares} Ha)
+              </strong>
+            </div>
+            <div>
+              <span className="text-[10px] text-slate-500 block">Status PBB</span>
+              <span
+                className={`inline-block mt-0.5 px-1.5 py-0.5 rounded text-[10px] font-extrabold ${
+                  activeSelectedParcel.pbbStatus === 'LUNAS'
+                    ? 'bg-emerald-100 text-emerald-800'
+                    : activeSelectedParcel.pbbStatus === 'BEBAS_PAJAK'
+                    ? 'bg-purple-100 text-purple-800'
+                    : 'bg-amber-100 text-amber-800'
+                }`}
+              >
+                {activeSelectedParcel.pbbStatus}
+              </span>
+            </div>
+            <div>
+              <span className="text-[10px] text-slate-500 block">Status SPORADIK</span>
+              <span className="text-[11px] font-bold text-blue-700 block">
+                {activeSelectedParcel.sporadikStatus.replace(/_/g, ' ')}
+              </span>
+            </div>
+          </div>
+
+          {(onPrintReceipt || onTriggerSporadik || onNavigateSporadik) && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {activeSelectedParcel.sporadikRequestCode && onNavigateSporadik ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void exitFullscreen();
+                    onNavigateSporadik(activeSelectedParcel.sporadikRequestCode!);
+                  }}
+                  className="flex-1 py-1.5 px-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[11px] font-bold inline-flex items-center justify-center gap-1"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                  <span>Berkas SPORADIK</span>
+                </button>
+              ) : onTriggerSporadik ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void exitFullscreen();
+                    onTriggerSporadik(activeSelectedParcel);
+                  }}
+                  className="flex-1 py-1.5 px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-bold inline-flex items-center justify-center gap-1"
+                >
+                  <Send className="w-3 h-3" />
+                  <span>Buat SPORADIK</span>
+                </button>
+              ) : null}
+
+              {onPrintReceipt && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void exitFullscreen();
+                    onPrintReceipt(activeSelectedParcel);
+                  }}
+                  className="flex-1 py-1.5 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 rounded-lg text-[11px] font-bold inline-flex items-center justify-center gap-1"
+                >
+                  <Printer className="w-3 h-3 text-emerald-700" />
+                  <span>Cetak SPPT</span>
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Legend Warna Poligon Spasial */}
-      <div className="absolute bottom-3 right-3 z-[1000] hidden md:flex items-center gap-2.5 bg-white/90 backdrop-blur-md px-3 py-1.5 rounded-xl shadow-md border border-slate-200 text-[11px] font-medium text-slate-700">
+      <div className="absolute bottom-3 right-14 z-[1000] hidden md:flex items-center gap-2.5 bg-white/90 backdrop-blur-md px-3 py-1.5 rounded-xl shadow-md border border-slate-200 text-[11px] font-medium text-slate-700">
         <div className="flex items-center gap-1">
           <span className="w-3 h-3 rounded-full bg-blue-600 inline-block"></span>
           <span>SPORADIK Terbit</span>

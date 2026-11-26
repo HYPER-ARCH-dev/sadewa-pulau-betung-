@@ -6,6 +6,10 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import { seedInitialData, DatabaseSchema } from '../server/db/database';
+import {
+  buildFacilityMetadataGeoJson,
+  normalizeFacilityCoordinatePair
+} from '../server/utils/facilityNormalizer';
 
 if (process.env.DATABASE_URL) {
   process.env.DATABASE_URL = process.env.DATABASE_URL.replace(/:\[([^\]]+)\]@/, ':$1@');
@@ -684,30 +688,36 @@ async function main() {
   if (dbData.facilities && dbData.facilities.length > 0) {
     console.log(`📍 Seeding ${dbData.facilities.length} Map Facilities...`);
     for (const fac of dbData.facilities) {
+      const validPair = normalizeFacilityCoordinatePair(fac.coordinates);
+      const metadataGeoJson = buildFacilityMetadataGeoJson(fac);
       await prisma.mapFacility.upsert({
         where: { id: fac.id },
         update: {
+          villageId: fac.villageId || null,
           name: fac.name,
           category: fac.category,
           address: fac.address,
           dusun: fac.dusun,
           coordinatesLabel: fac.coordinatesLabel,
           description: fac.description,
-          coordinates: fac.coordinates || [0, 0],
-          imageUrl: fac.imageUrl,
-          contact: fac.contact
+          coordinates: validPair ?? [],
+          imageUrl: typeof fac.imageUrl === 'string' ? fac.imageUrl.trim() : '',
+          contact: fac.contact,
+          ...(metadataGeoJson ? { geometryGeoJson: metadataGeoJson } : {})
         },
         create: {
           id: fac.id,
+          villageId: fac.villageId || null,
           name: fac.name,
           category: fac.category,
           address: fac.address,
           dusun: fac.dusun,
           coordinatesLabel: fac.coordinatesLabel,
           description: fac.description,
-          coordinates: fac.coordinates || [0, 0],
-          imageUrl: fac.imageUrl,
-          contact: fac.contact
+          coordinates: validPair ?? [],
+          imageUrl: typeof fac.imageUrl === 'string' ? fac.imageUrl.trim() : '',
+          contact: fac.contact,
+          ...(metadataGeoJson ? { geometryGeoJson: metadataGeoJson } : {})
         }
       });
     }

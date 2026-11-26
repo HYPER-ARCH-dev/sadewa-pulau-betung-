@@ -13,6 +13,10 @@ import path from 'path';
 import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
 import { getPrisma as getSharedPrisma } from '../prisma-helpers';
+import {
+  buildFacilityMetadataGeoJson,
+  normalizeFacilityCoordinatePair
+} from '../../utils/facilityNormalizer';
 
 export type TransactionClient = Omit<PrismaClient, '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'>;
 
@@ -929,10 +933,37 @@ export async function executeDualWriteSync(dbData: any): Promise<void> {
     try {
       await prisma.$transaction(async (tx: TransactionClient) => {
         for (const fac of dbData.facilities) {
+          const validPair = normalizeFacilityCoordinatePair(fac.coordinates);
+          const metadataGeoJson = buildFacilityMetadataGeoJson(fac);
           await tx.mapFacility.upsert({
             where: { id: fac.id },
-            update: { name: fac.name, category: fac.category, address: fac.address, dusun: fac.dusun, coordinatesLabel: fac.coordinatesLabel, description: fac.description || '', coordinates: fac.coordinates || [0, 0] },
-            create: { id: fac.id, name: fac.name, category: fac.category, address: fac.address, dusun: fac.dusun, coordinatesLabel: fac.coordinatesLabel, description: fac.description || '', coordinates: fac.coordinates || [0, 0] }
+            update: {
+              villageId: fac.villageId || null,
+              name: fac.name,
+              category: fac.category,
+              address: fac.address,
+              dusun: fac.dusun,
+              coordinatesLabel: fac.coordinatesLabel,
+              description: fac.description || '',
+              coordinates: validPair ?? [],
+              imageUrl: typeof fac.imageUrl === 'string' ? fac.imageUrl.trim() : '',
+              contact: fac.contact || '',
+              ...(metadataGeoJson ? { geometryGeoJson: metadataGeoJson } : {})
+            },
+            create: {
+              id: fac.id,
+              villageId: fac.villageId || null,
+              name: fac.name,
+              category: fac.category,
+              address: fac.address,
+              dusun: fac.dusun,
+              coordinatesLabel: fac.coordinatesLabel,
+              description: fac.description || '',
+              coordinates: validPair ?? [],
+              imageUrl: typeof fac.imageUrl === 'string' ? fac.imageUrl.trim() : '',
+              contact: fac.contact || '',
+              ...(metadataGeoJson ? { geometryGeoJson: metadataGeoJson } : {})
+            }
           });
         }
       });

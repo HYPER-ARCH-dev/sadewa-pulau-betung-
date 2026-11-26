@@ -9,6 +9,7 @@ import { hashPassword, generateSalt } from '../auth';
 import { executeDualWriteSync } from './sync/syncEngine';
 import { getPrisma, isDatabaseAvailableCached } from './prisma-helpers';
 import { sanitizeDiagnosticMessage } from './connection-diagnostic';
+import { normalizeMapFacilityRecord } from '../utils/facilityNormalizer';
 import {
   INITIAL_USERS,
   INITIAL_SERVICES,
@@ -837,18 +838,7 @@ export class PostgresPrismaAdapter implements IDatabaseAdapter {
             isVerified: u.isVerified,
             verified: u.isVerified
           })),
-          facilities: facilities.map((fac: any) => ({
-            id: fac.id,
-            name: fac.name,
-            category: fac.category as any,
-            address: fac.address,
-            dusun: fac.dusun,
-            coordinatesLabel: fac.coordinatesLabel,
-            description: fac.description,
-            coordinates: (fac.coordinates as [number, number]) || [0, 0],
-            imageUrl: fac.imageUrl || undefined,
-            contact: fac.contact || undefined
-          })),
+          facilities: facilities.map((fac: any) => normalizeMapFacilityRecord(fac)),
           gallery: gallery.map((gal: any) => ({
             id: gal.id,
             title: gal.title,

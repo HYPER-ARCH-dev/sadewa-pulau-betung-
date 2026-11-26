@@ -1,12 +1,56 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { LandParcel, DusunSpatialBoundary, WebGisSummary } from '../../types/webgis';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { LandParcel, DusunSpatialBoundary, GisVillageBoundary, WebGisSummary } from '../../types/webgis';
 import { INITIAL_LAND_PARCELS, INITIAL_DUSUN_BOUNDARIES } from '../../data/initialWebGisData';
 import { WebGisMap } from '../gis/WebGisMap';
 import { PbbTaxReceiptModal } from '../gis/PbbTaxReceiptModal';
+import { BoundaryManagerPanel } from '../gis/BoundaryManagerPanel';
+import { GisConfigPanel } from '../gis/GisConfigPanel';
+import { api } from '../../services/api';
 import { calculatePolygonAreaShoelace, calculatePbbTax, getBoundaryDirection } from '../../utils/geometryEngine';
 import { calculateHaversineDistance } from '../../utils/haversine';
+import {
+  BoundaryLayerState,
+  ParcelLayerState,
+  buildBoundaryGeoJsonExport,
+  buildParcelGeoJsonExport,
+  downloadGeoJsonBlob,
+  validateGeoJsonGeometryStrict
+} from '../../utils/webGisGeoJson';
 import { useApp } from '../../context/AppContext';
-import { Map, Compass, Layers, Search, Filter, Plus, FileText, CheckCircle, Clock, Printer, Download, Upload, RotateCcw, ExternalLink, ShieldCheck, Building2, Trash2, Edit, Info, ChevronRight, Send, Eye, FileCode, FileSpreadsheet } from "lucide-react";
+import { Map, Compass, Layers, Search, Filter, Plus, FileText, CheckCircle, Clock, Printer, Download, Upload, RotateCcw, ExternalLink, ShieldCheck, Building2, Trash2, Edit, Info, ChevronRight, Send, Eye, FileCode, FileSpreadsheet, Settings, History, Ruler, Link2, MapPin } from "lucide-react";
+
+type WebGisSubmenuId =
+  | 'peta_layer'
+  | 'batas_wilayah'
+  | 'import_export'
+  | 'analisis_spasial'
+  | 'konfigurasi_gis'
+  | 'riwayat_audit'
+  | 'integrasi_layanan';
+
+interface GisChangeLogItem {
+  id: string;
+  entityType: string;
+  entityId: string;
+  action: string;
+  actorName?: string | null;
+  note?: string | null;
+  createdAt: string;
+}
+
+const WEBGIS_SUBMENUS: {
+  id: WebGisSubmenuId;
+  label: string;
+  badge?: string;
+}[] = [
+  { id: 'peta_layer', label: '1. Peta & Layer GIS' },
+  { id: 'batas_wilayah', label: '2. Batas Wilayah & Verifikasi' },
+  { id: 'import_export', label: '3. Import & Export Spasial' },
+  { id: 'analisis_spasial', label: '4. Analisis Spasial' },
+  { id: 'konfigurasi_gis', label: '5. Konfigurasi Desa & Peta' },
+  { id: 'riwayat_audit', label: '6. Riwayat & Audit Spasial' },
+  { id: 'integrasi_layanan', label: '7. Integrasi Layanan & Pajak' }
+];
 
 const LOCAL_STORAGE_PARCELS_KEY = 'sadewa_webgis_parcels_v1';
 
@@ -40,54 +84,40 @@ export function parseGeoJsonToParcels(geoJsonData: Record<string, unknown>): { p
       const props = feat.properties || feat.props || {};
       const geometry = feat.geometry || feat;
 
-      if (!geometry || !geometry.coordinates) {
+      if (!geometry || typeof geometry !== 'object') {
         errors.push(`Fitur #${idx + 1}: Geometri tidak ditemukan.`);
         return;
       }
 
-      let rawCoords: any[] = [];
-
-      if (geometry.type === 'Polygon' && Array.isArray(geometry.coordinates) && geometry.coordinates.length > 0) {
-        rawCoords = geometry.coordinates[0];
-      } else if (geometry.type === 'MultiPolygon' && Array.isArray(geometry.coordinates) && geometry.coordinates.length > 0) {
-        rawCoords = geometry.coordinates[0][0];
-      } else if (Array.isArray(geometry.coordinates) && Array.isArray(geometry.coordinates[0])) {
-        rawCoords = geometry.coordinates[0];
-      }
-
-      if (!rawCoords || rawCoords.length < 3) {
-        errors.push(`Fitur #${idx + 1}: Jumlah titik koordinat kurang dari 3 (diperlukan minimal 3 titik poligon).`);
+      // Validasi Geometri GeoJSON strict [longitude, latitude] tanpa auto-swap / perbaikan diam-diam
+      const geomCheck = validateGeoJsonGeometryStrict(geometry);
+      if (!geomCheck.valid) {
+        errors.push(`Fitur #${idx + 1}: ${geomCheck.reason || 'Geometri tidak valid.'}`);
         return;
       }
 
-      // Convert GeoJSON [longitude, latitude] to Leaflet / SADEWA [latitude, longitude]
-      const convertedCoords: [number, number][] = rawCoords
-        .map((pt: any) => {
-          if (!Array.isArray(pt) || pt.length < 2) return null;
-          const num0 = Number(pt[0]);
-          const num1 = Number(pt[1]);
-          if (isNaN(num0) || isNaN(num1)) return null;
+      const rawCoords: unknown[] =
+        geometry.type === 'Polygon'
+          ? geometry.coordinates[0]
+          : geometry.coordinates[0][0];
 
-          // GeoJSON standard is [lng, lat]. In Pemayung Batang Hari, lat is ~ -1.5, lng is ~ 103.3.
-          if (Math.abs(num0) > Math.abs(num1)) {
-            return [num1, num0] as [number, number]; // [lat, lng]
-          } else {
-            return [num0, num1] as [number, number]; // [lat, lng]
-          }
-        })
-        .filter((pt): pt is [number, number] => pt !== null);
+      // Convert GeoJSON [longitude, latitude] tervalidasi ke format internal Leaflet [latitude, longitude]
+      const convertedCoords: [number, number][] = rawCoords.map((pt: any) => [
+        Number(pt[1]),
+        Number(pt[0])
+      ]);
 
-      // Clean trailing duplicate closing vertex if present in GeoJSON polygon
+      // Hapus titik penutup duplikat untuk representasi vertex internal Leaflet (tanpa mengubah posisi sudut)
       if (convertedCoords.length > 3) {
         const first = convertedCoords[0];
         const last = convertedCoords[convertedCoords.length - 1];
-        if (Math.abs(first[0] - last[0]) < 0.0000001 && Math.abs(first[1] - last[1]) < 0.0000001) {
+        if (first[0] === last[0] && first[1] === last[1]) {
           convertedCoords.pop();
         }
       }
 
       if (convertedCoords.length < 3) {
-        errors.push(`Fitur #${idx + 1}: Titik koordinat valid tidak mencukupi.`);
+        errors.push(`Fitur #${idx + 1}: Titik sudut unik poligon tidak mencukupi (minimal 3).`);
         return;
       }
 
@@ -234,12 +264,131 @@ export function parseGeoJsonToParcels(geoJsonData: Record<string, unknown>): { p
 }
 
 export const WebGisManager: React.FC = () => {
-  const { addToast, navigateTo, villageProfile, serviceRequests, setServiceRequests, webGisData: parcels, setWebGisData: setParcels, addLandParcel, updateLandParcel, deleteLandParcel } = useApp();
+  const {
+    addToast,
+    navigateTo,
+    villageProfile,
+    facilities,
+    gisBootstrap,
+    auditLogs,
+    serviceRequests,
+    setServiceRequests,
+    webGisData: parcels,
+    setWebGisData: setParcels,
+    addLandParcel,
+    updateLandParcel,
+    deleteLandParcel
+  } = useApp();
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const [activeSubmenu, setActiveSubmenu] = useState<WebGisSubmenuId>('peta_layer');
+  const [gisChangeLogs, setGisChangeLogs] = useState<GisChangeLogItem[]>([]);
+  const [loadingChangeLogs, setLoadingChangeLogs] = useState(false);
+
+  // =========================================================================
+  // STATE LAYER TERISOLASI #1: BATAS WILAYAH ADMINISTRATIF (DESA & DUSUN)
+  // Terpisah sepenuhnya dari state & data bidang tanah / persil warga.
+  // =========================================================================
+  const [boundaryFeatures, setBoundaryFeatures] = useState<GisVillageBoundary[]>(() => {
+    if (gisBootstrap?.visibleBoundaries && gisBootstrap.visibleBoundaries.length > 0) {
+      return gisBootstrap.visibleBoundaries;
+    }
+    return gisBootstrap?.activeBoundary ? [gisBootstrap.activeBoundary] : [];
+  });
+  const [boundaryLoading, setBoundaryLoading] = useState<boolean>(false);
+  const [boundaryError, setBoundaryError] = useState<string | null>(null);
   const [dusunBoundaries] = useState<DusunSpatialBoundary[]>(INITIAL_DUSUN_BOUNDARIES);
+
+  // =========================================================================
+  // STATE LAYER TERISOLASI #2: BIDANG TANAH / PERSIL BPN & PBB-P2
+  // =========================================================================
   const [selectedParcelId, setSelectedParcelId] = useState<string | null>(() => parcels[0]?.id || 'PARCEL-PB-001');
+  const [confirmResetParcels, setConfirmResetParcels] = useState(false);
+  const [confirmDeleteParcelId, setConfirmDeleteParcelId] = useState<string | null>(null);
+
+  const loadIsolatedBoundaries = useCallback(async () => {
+    setBoundaryLoading(true);
+    setBoundaryError(null);
+    try {
+      const res = await api.getAdminGisBoundaries();
+      if (res.success && Array.isArray(res.data)) {
+        setBoundaryFeatures(res.data);
+      } else {
+        setBoundaryError(res.error || 'Gagal memuat batas wilayah administratif.');
+      }
+    } catch {
+      setBoundaryError('Tidak dapat terhubung ke server GIS untuk batas wilayah.');
+    } finally {
+      setBoundaryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeSubmenu === 'peta_layer' || activeSubmenu === 'import_export') {
+      void loadIsolatedBoundaries();
+    }
+  }, [activeSubmenu, loadIsolatedBoundaries]);
+
+  const boundaryExportBuild = useMemo(
+    () => buildBoundaryGeoJsonExport(boundaryFeatures, dusunBoundaries, villageProfile),
+    [boundaryFeatures, dusunBoundaries, villageProfile]
+  );
+
+  const boundaryLayerState: BoundaryLayerState = useMemo(
+    () => ({
+      boundaryFeatures,
+      dusunBoundaries,
+      boundaryGeoJson: boundaryExportBuild.featureCollection,
+      boundaryLoading,
+      boundaryError,
+      boundaryMetadata: {
+        datasetType: 'administrative_boundary',
+        sourceLabel: `${boundaryFeatures.length} Batas Desa + ${dusunBoundaries.length} Batas Dusun`,
+        lastUpdatedAt: boundaryExportBuild.featureCollection.metadata.exported_at,
+        totalCount: boundaryFeatures.length + dusunBoundaries.length,
+        validCount: boundaryExportBuild.validCount,
+        invalidCount: boundaryExportBuild.rejectedCount
+      }
+    }),
+    [boundaryFeatures, dusunBoundaries, boundaryExportBuild, boundaryLoading, boundaryError]
+  );
+
+  const parcelExportBuild = useMemo(() => buildParcelGeoJsonExport(parcels), [parcels]);
+
+  const parcelLayerState: ParcelLayerState = useMemo(
+    () => ({
+      parcelFeatures: parcels,
+      parcelGeoJson: parcelExportBuild.featureCollection,
+      parcelLoading: false,
+      parcelError: null,
+      parcelMetadata: {
+        datasetType: 'land_parcel',
+        sourceLabel: `${parcels.length} Bidang Tanah / Persil`,
+        lastUpdatedAt: parcelExportBuild.featureCollection.metadata.exported_at,
+        totalCount: parcels.length,
+        validCount: parcelExportBuild.validCount,
+        invalidCount: parcelExportBuild.rejectedCount
+      }
+    }),
+    [parcels, parcelExportBuild]
+  );
+
+  useEffect(() => {
+    if (activeSubmenu !== 'riwayat_audit') return;
+    let mounted = true;
+    setLoadingChangeLogs(true);
+    api.getAdminGisChangeLogs().then((res) => {
+      if (!mounted) return;
+      setLoadingChangeLogs(false);
+      if (res.success && Array.isArray(res.data)) {
+        setGisChangeLogs(res.data);
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [activeSubmenu]);
 
   // Search & Filter
   const [searchTerm, setSearchTerm] = useState('');
@@ -434,44 +583,66 @@ export const WebGisManager: React.FC = () => {
     navigateTo('admin_services', { trackingCode });
   };
 
-  // Export GeoJSON
-  const handleExportGeoJson = () => {
-    const geoJson = {
-      type: 'FeatureCollection',
-      name: 'WebGIS_Desa_Pulau_Betung',
-      features: parcels.map((p) => ({
-        type: 'Feature',
-        properties: {
-          id: p.id,
-          NOP: p.nop,
-          PEMILIK: p.ownerName,
-          NIK: p.ownerNik,
-          TELP: p.phone,
-          DUSUN: p.addressDusun,
-          KATEGORI: p.landUseCategory,
-          LUAS_M2: p.landAreaSqM,
-          LUAS_HA: p.landAreaHectares,
-          NJOP_BUMI: p.njopLandPerSqM,
-          NJOP_BANGUNAN: p.njopBuildingPerSqM,
-          PBB_AMOUNT: p.pbbTaxAmount,
-          STATUS_PBB: p.pbbStatus,
-          STATUS_SPORADIK: p.sporadikStatus
-        },
-        geometry: {
-          type: 'Polygon',
-          coordinates: [[...p.coordinates.map((c) => [c[1], c[0]]), [p.coordinates[0][1], p.coordinates[0][0]]]]
-        }
-      }))
-    };
+  // Export GeoJSON #1: KHUSUS Batas Wilayah Administratif (Desa Utama, Desa Sebelah & Dusun)
+  const handleExportBoundaryGeoJson = () => {
+    const result = buildBoundaryGeoJsonExport(
+      boundaryLayerState.boundaryFeatures,
+      boundaryLayerState.dusunBoundaries,
+      villageProfile
+    );
 
-    const blob = new Blob([JSON.stringify(geoJson, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `WebGIS_Desa_Pulau_Betung_${new Date().toISOString().split('T')[0]}.geojson`;
-    a.click();
+    if (result.validCount === 0) {
+      const reason =
+        result.rejectedFeatures[0]?.reason ||
+        'Belum ada poligon batas wilayah administratif yang tersedia untuk diekspor.';
+      addToast('warning', 'Ekspor Batas Wilayah Dibatalkan', reason);
+      return;
+    }
 
-    addToast('success', 'Ekspor GeoJSON Selesai', 'File peta spasial GeoJSON berhasil diunduh untuk QGIS/BPN.');
+    downloadGeoJsonBlob(result.featureCollection, 'batas_wilayah.geojson');
+
+    if (result.rejectedCount > 0) {
+      addToast(
+        'warning',
+        'Ekspor Batas Wilayah Selesai (Sebagian Ditolak)',
+        `${result.validCount} fitur batas wilayah diekspor ke batas_wilayah.geojson. ${result.rejectedCount} fitur tidak valid dikecualikan (${result.rejectedFeatures[0]?.reason}).`
+      );
+    } else {
+      addToast(
+        'success',
+        'Export Batas Wilayah Berhasil',
+        `${result.validCount} poligon batas administratif berhasil diekspor ke batas_wilayah.geojson.`
+      );
+    }
+  };
+
+  // Export GeoJSON #2: KHUSUS Bidang Tanah / Persil Warga
+  const handleExportParcelGeoJson = () => {
+    const result = buildParcelGeoJsonExport(parcelLayerState.parcelFeatures);
+
+    if (result.validCount === 0) {
+      const reason =
+        result.rejectedFeatures[0]?.reason ||
+        'Belum ada poligon bidang tanah yang valid untuk diekspor.';
+      addToast('warning', 'Ekspor Bidang Tanah Dibatalkan', reason);
+      return;
+    }
+
+    downloadGeoJsonBlob(result.featureCollection, 'bidang_tanah_persil.geojson');
+
+    if (result.rejectedCount > 0) {
+      addToast(
+        'warning',
+        'Ekspor Bidang Tanah Selesai (Sebagian Ditolak)',
+        `${result.validCount} bidang tanah diekspor ke bidang_tanah_persil.geojson. ${result.rejectedCount} bidang tidak valid dikecualikan (${result.rejectedFeatures[0]?.reason}).`
+      );
+    } else {
+      addToast(
+        'success',
+        'Export Bidang Tanah Berhasil',
+        `${result.validCount} poligon bidang tanah berhasil diekspor ke bidang_tanah_persil.geojson.`
+      );
+    }
   };
 
   // Handle Import GeoJSON Click
@@ -503,7 +674,7 @@ export const WebGisManager: React.FC = () => {
           return;
         }
 
-        // Merge imported parcels with current dataset
+        // Merge imported parcels with current parcel dataset (tidak menyentuh batas wilayah)
         const updatedList = [...importedParcels, ...parcels.filter((p) => !importedParcels.some((imp) => imp.nop === p.nop))];
 
         setParcels(updatedList);
@@ -514,11 +685,19 @@ export const WebGisManager: React.FC = () => {
         const totalSqM = importedParcels.reduce((sum, p) => sum + p.landAreaSqM, 0);
         const totalHa = Math.round((totalSqM / 10000) * 100) / 100;
 
-        addToast(
-          'success',
-          'Impor Data Spasial BPN Selesai',
-          `Berhasil mengimpor ${importedParcels.length} bidang tanah BPN Desa Pulau Betung (${totalHa} Ha / ${totalSqM.toLocaleString('id-ID')} m²).`
-        );
+        if (errors.length > 0) {
+          addToast(
+            'warning',
+            'Impor Bidang Tanah Selesai (Sebagian Ditolak)',
+            `Berhasil mengimpor ${importedParcels.length} bidang (${totalHa} Ha). ${errors.length} fitur ditolak: ${errors[0]}`
+          );
+        } else {
+          addToast(
+            'success',
+            'Impor Data Spasial BPN Selesai',
+            `Berhasil mengimpor ${importedParcels.length} bidang tanah BPN Desa Pulau Betung (${totalHa} Ha / ${totalSqM.toLocaleString('id-ID')} m²).`
+          );
+        }
       } catch (err: unknown) {
         addToast(
           'error',
@@ -531,15 +710,14 @@ export const WebGisManager: React.FC = () => {
   };
 
   // Handle Reset Default Data
-  const handleResetDefaultParcels = () => {
-    if (window.confirm('Apakah Anda yakin ingin mengembalikan peta spasial ke data awal BPN Desa Pulau Betung?')) {
-      setParcels(INITIAL_LAND_PARCELS);
-      if (typeof window !== 'undefined') {
-        localStorage.removeItem(LOCAL_STORAGE_PARCELS_KEY);
-      }
-      setSelectedParcelId(INITIAL_LAND_PARCELS[0]?.id || null);
-      addToast('info', 'Reset Data Spasial', 'Data peta bidang tanah dikembalikan ke setelan awal.');
+  const handleConfirmResetDefaultParcels = () => {
+    setParcels(INITIAL_LAND_PARCELS);
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(LOCAL_STORAGE_PARCELS_KEY);
     }
+    setSelectedParcelId(INITIAL_LAND_PARCELS[0]?.id || null);
+    setConfirmResetParcels(false);
+    addToast('info', 'Reset Data Spasial', 'Data peta bidang tanah dikembalikan ke setelan awal.');
   };
 
   // Handle Download Sample GeoJSON
@@ -637,19 +815,21 @@ export const WebGisManager: React.FC = () => {
     const a = document.createElement('a');
     a.href = url;
     a.download = 'Contoh_Template_Peta_BPN_Pulau_Betung.geojson';
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
     addToast('info', 'Unduh Contoh GeoJSON', 'Template GeoJSON BPN Desa Pulau Betung berhasil diunduh.');
   };
 
   // Handle Delete Parcel
-  const handleDeleteParcelClick = (parcelId: string, ownerName: string) => {
-    if (window.confirm(`Apakah Anda yakin ingin menghapus data bidang tanah atas nama ${ownerName}?`)) {
-      deleteLandParcel(parcelId);
-      if (selectedParcelId === parcelId) {
-        setSelectedParcelId(null);
-      }
-      addToast('success', 'Bidang Tanah Dihapus', `Data bidang tanah ${ownerName} telah dihapus dari peta.`);
+  const handleConfirmDeleteParcel = (parcelId: string, ownerName: string) => {
+    deleteLandParcel(parcelId);
+    if (selectedParcelId === parcelId) {
+      setSelectedParcelId(null);
     }
+    setConfirmDeleteParcelId(null);
+    addToast('success', 'Bidang Tanah Dihapus', `Data bidang tanah ${ownerName} telah dihapus dari peta.`);
   };
 
   return (
@@ -694,31 +874,61 @@ export const WebGisManager: React.FC = () => {
             <span>Import Peta BPN / GeoJSON</span>
           </button>
 
-          {/* Tombol Ekspor GeoJSON */}
+          {/* Tombol Ekspor GeoJSON Terpisah: Batas Wilayah vs Bidang Tanah */}
           <button
             type="button"
-            onClick={handleExportGeoJson}
+            onClick={handleExportBoundaryGeoJson}
             className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-2xs"
-            title="Ekspor seluruh data peta spasial ke format GeoJSON QGIS"
+            title="Ekspor poligon batas administratif desa & dusun ke batas_wilayah.geojson"
+          >
+            <Download className="w-4 h-4 text-sky-400" />
+            <span>Export Batas Wilayah (.geojson)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleExportParcelGeoJson}
+            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-2xs"
+            title="Ekspor data poligon bidang tanah/persil warga ke bidang_tanah_persil.geojson"
           >
             <Download className="w-4 h-4 text-emerald-400" />
-            <span>Ekspor GeoJSON</span>
+            <span>Export Bidang Tanah (.geojson)</span>
           </button>
 
           {/* Tombol Reset Data Spasial Default */}
-          <button
-            type="button"
-            onClick={handleResetDefaultParcels}
-            className="p-2 bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700/80 rounded-xl text-xs font-bold transition-all flex items-center gap-1"
-            title="Reset peta ke data spasial awal Desa Pulau Betung"
-          >
-            <RotateCcw className="w-4 h-4 text-slate-400" />
-          </button>
+          {confirmResetParcels ? (
+            <div className="flex items-center gap-1.5 bg-slate-800/90 border border-rose-500/50 rounded-xl px-2 py-1">
+              <button
+                type="button"
+                onClick={handleConfirmResetDefaultParcels}
+                className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[11px] font-bold"
+              >
+                Ya, Reset
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmResetParcels(false)}
+                className="px-2 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-[11px] font-bold"
+              >
+                Batal
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirmResetParcels(true)}
+              className="p-2 bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700/80 rounded-xl text-xs font-bold transition-all flex items-center gap-1"
+              title="Reset peta ke data spasial awal Desa Pulau Betung"
+            >
+              <RotateCcw className="w-4 h-4 text-slate-400" />
+            </button>
+          )}
 
           {/* Tombol Tambah Bidang Manual */}
           <button
             type="button"
             onClick={() => {
+              setActiveSubmenu('peta_layer');
               setIsAddModalOpen(true);
               setIsDrawingMode(true);
             }}
@@ -729,6 +939,308 @@ export const WebGisManager: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* --- NAVIGASI 7 SUBMENU INTERNAL WEBGISMANAGER --- */}
+      <div className="bg-white p-2 rounded-2xl border border-slate-200/80 shadow-xs overflow-x-auto">
+        <div className="flex items-center gap-1.5 min-w-max">
+          {WEBGIS_SUBMENUS.map((tab) => {
+            const isActiveTab = activeSubmenu === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveSubmenu(tab.id)}
+                className={`px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1.5 ${
+                  isActiveTab
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                }`}
+              >
+                {tab.id === 'peta_layer' && <Layers className="w-3.5 h-3.5" />}
+                {tab.id === 'batas_wilayah' && <Map className="w-3.5 h-3.5" />}
+                {tab.id === 'import_export' && <FileCode className="w-3.5 h-3.5" />}
+                {tab.id === 'analisis_spasial' && <Ruler className="w-3.5 h-3.5" />}
+                {tab.id === 'konfigurasi_gis' && <Settings className="w-3.5 h-3.5" />}
+                {tab.id === 'riwayat_audit' && <History className="w-3.5 h-3.5" />}
+                {tab.id === 'integrasi_layanan' && <Link2 className="w-3.5 h-3.5" />}
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {activeSubmenu === 'batas_wilayah' && (
+        <BoundaryManagerPanel
+          dusunBoundaries={dusunBoundaries}
+          facilities={facilities}
+          onSwitchToConfig={() => setActiveSubmenu('konfigurasi_gis')}
+        />
+      )}
+
+      {activeSubmenu === 'konfigurasi_gis' && <GisConfigPanel />}
+
+      {activeSubmenu === 'import_export' && (
+        <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-xs space-y-5">
+          <div className="border-b border-slate-200 pb-4">
+            <span className="text-[10px] font-extrabold text-emerald-700 uppercase tracking-wider block">
+              IMPORT &amp; EXPORT DATA SPASIAL
+            </span>
+            <h3 className="text-base font-extrabold text-slate-900 mt-0.5">
+              Pusat Pertukaran Data GeoJSON Bidang Tanah &amp; Batas Wilayah
+            </h3>
+            <p className="text-xs text-slate-600 mt-1">
+              Kelola ekspor/impor poligon persil PBB-P2/BPN atau muat poligon GeoJSON batas administratif desa.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+              <strong className="text-sm text-slate-900 block">1. Bidang Tanah PBB-P2 / BPN ({parcels.length} Persil)</strong>
+              <p className="text-slate-600 leading-relaxed">
+                Impor bidang tanah dari QGIS/BPN dengan atribut NOP, NIK, Pemilik, dan Dusun atau ekspor persil aktif.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={handleImportGeoJsonClick}
+                  className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold inline-flex items-center gap-1.5"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Unggah GeoJSON Persil</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportParcelGeoJson}
+                  className="px-3.5 py-2 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-bold inline-flex items-center gap-1.5"
+                >
+                  <Download className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Export Bidang Tanah (.geojson)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadSampleGeoJson}
+                  className="px-3.5 py-2 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold inline-flex items-center gap-1.5"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Template BPN</span>
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Status Validasi Layer Persil: <strong className="text-slate-700">{parcelLayerState.parcelMetadata.validCount} valid</strong> dari {parcelLayerState.parcelMetadata.totalCount} bidang.
+              </p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+              <strong className="text-sm text-slate-900 block">
+                2. Poligon Batas Administratif Desa &amp; Dusun ({boundaryLayerState.boundaryMetadata.validCount} Fitur)
+              </strong>
+              <p className="text-slate-600 leading-relaxed">
+                Impor berkas GeoJSON batas desa resmi (BIG/Pemda/hasil survei) atau ekspor khusus batas administratif tanpa atribut NOP/PBB.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={handleExportBoundaryGeoJson}
+                  className="px-3.5 py-2 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-bold inline-flex items-center gap-1.5"
+                >
+                  <Download className="w-3.5 h-3.5 text-sky-600" />
+                  <span>Export Batas Wilayah (.geojson)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveSubmenu('batas_wilayah')}
+                  className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold inline-flex items-center gap-1.5"
+                >
+                  <Map className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Buka Impor Batas Wilayah</span>
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Sumber Batas Terisolasi: <strong className="text-slate-700">{boundaryLayerState.boundaryMetadata.sourceLabel}</strong>.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeSubmenu === 'analisis_spasial' && (
+        <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-xs space-y-5">
+          <div className="border-b border-slate-200 pb-4">
+            <span className="text-[10px] font-extrabold text-emerald-700 uppercase tracking-wider block">
+              ANALISIS &amp; PENGUKURAN SPASIAL
+            </span>
+            <h3 className="text-base font-extrabold text-slate-900 mt-0.5">
+              Metrik Geometri Shoelace &amp; Keliling Haversine ({gisBootstrap?.villageName || 'Desa Pulau Betung'})
+            </h3>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+            <div className="p-4 rounded-2xl bg-emerald-50/70 border border-emerald-200 space-y-1">
+              <span className="text-emerald-800 font-bold block">Total Luas Bidang Terpeta</span>
+              <strong className="text-2xl font-black text-emerald-950 block">{summary.totalAreaHectares} Ha</strong>
+              <span className="text-emerald-700">{summary.totalAreaSqM.toLocaleString('id-ID')} m² dari {summary.totalParcels} persil</span>
+            </div>
+            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-1">
+              <span className="text-slate-600 font-bold block">Luas Poligon Batas Desa Aktif</span>
+              <strong className="text-2xl font-black text-slate-900 block">
+                {gisBootstrap?.activeBoundary?.areaSqM
+                  ? `${(gisBootstrap.activeBoundary.areaSqM / 10000).toLocaleString('id-ID', { maximumFractionDigits: 2 })} Ha`
+                  : 'Belum Terdefinisi'}
+              </strong>
+              <span className="text-slate-500">
+                {gisBootstrap?.activeBoundary?.perimeterMeters
+                  ? `Keliling: ${Math.round(gisBootstrap.activeBoundary.perimeterMeters).toLocaleString('id-ID')} m`
+                  : 'Tambahkan batas di submenu Batas Wilayah'}
+              </span>
+            </div>
+            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-1">
+              <span className="text-slate-600 font-bold block">Titik Fasilitas Terpetakan</span>
+              <strong className="text-2xl font-black text-slate-900 block">
+                {
+                  facilities.filter(
+                    (f) => f.isActive !== false && Array.isArray(f.coordinates) && f.coordinates.length === 2
+                  ).length
+                }{' '}
+                / {facilities.filter((f) => f.isActive !== false).length}
+              </strong>
+              <span className="text-slate-500">Fasilitas aktif dengan koordinat valid</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeSubmenu === 'riwayat_audit' && (
+        <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-200 pb-4">
+            <div>
+              <span className="text-[10px] font-extrabold text-emerald-700 uppercase tracking-wider block">
+                RIWAYAT &amp; AUDIT SPASIAL
+              </span>
+              <h3 className="text-base font-extrabold text-slate-900 mt-0.5">
+                Log Perubahan Konfigurasi GIS, Batas Wilayah &amp; WebGIS
+              </h3>
+            </div>
+          </div>
+
+          {loadingChangeLogs ? (
+            <p className="text-xs text-slate-500 py-4">Memuat log perubahan GIS dari server...</p>
+          ) : gisChangeLogs.length === 0 ? (
+            <p className="text-xs text-slate-500 py-4">
+              Belum ada riwayat perubahan pada konfigurasi GIS maupun batas wilayah desa.
+            </p>
+          ) : (
+            <div className="overflow-x-auto rounded-2xl border border-slate-200">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
+                  <tr>
+                    <th className="p-3">Waktu</th>
+                    <th className="p-3">Entitas</th>
+                    <th className="p-3">Aksi</th>
+                    <th className="p-3">Aktor</th>
+                    <th className="p-3">Catatan</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {gisChangeLogs.map((log) => (
+                    <tr key={log.id} className="hover:bg-slate-50">
+                      <td className="p-3 font-mono text-[11px] text-slate-500">
+                        {new Date(log.createdAt).toLocaleString('id-ID')}
+                      </td>
+                      <td className="p-3 font-bold text-slate-800">{log.entityType}</td>
+                      <td className="p-3">
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-bold">
+                          {log.action}
+                        </span>
+                      </td>
+                      <td className="p-3 text-slate-700">{log.actorName || '-'}</td>
+                      <td className="p-3 text-slate-600">{log.note || '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {auditLogs.filter((l) => l.module.toLowerCase().includes('gis') || l.module.toLowerCase().includes('spasial')).length > 0 && (
+            <div className="pt-2 space-y-2">
+              <h4 className="text-xs font-bold text-slate-700">Aktivitas Audit WebGIS Terbaru</h4>
+              <div className="space-y-1.5">
+                {auditLogs
+                  .filter((l) => l.module.toLowerCase().includes('gis') || l.module.toLowerCase().includes('spasial'))
+                  .slice(0, 8)
+                  .map((log) => (
+                    <div key={log.id} className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs flex items-center justify-between gap-2">
+                      <div>
+                        <strong className="text-slate-800">{log.action}</strong>
+                        <span className="text-slate-500 block text-[11px]">{log.details}</span>
+                      </div>
+                      <span className="text-[10px] font-mono text-slate-400 shrink-0">{log.timestamp}</span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeSubmenu === 'integrasi_layanan' && (
+        <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-xs space-y-5">
+          <div className="border-b border-slate-200 pb-4">
+            <span className="text-[10px] font-extrabold text-emerald-700 uppercase tracking-wider block">
+              INTEGRASI LAYANAN &amp; PAJAK
+            </span>
+            <h3 className="text-base font-extrabold text-slate-900 mt-0.5">
+              Sinkronisasi WebGIS dengan SPORADIK, PBB-P2 &amp; Modul Data Desa
+            </h3>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
+              <strong className="text-sm text-slate-900 block">Layanan Pertanahan (SPORADIK)</strong>
+              <p className="text-slate-600">
+                {summary.totalSporadikVerified} berkas terbit/terverifikasi dan {summary.totalSporadikDraft} draf survei terhubung dengan Layanan Surat.
+              </p>
+              <button
+                type="button"
+                onClick={() => navigateTo('admin_services')}
+                className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold inline-flex items-center gap-1.5"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Buka Manajemen Layanan</span>
+              </button>
+            </div>
+            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
+              <strong className="text-sm text-slate-900 block">Layer Fasilitas Desa</strong>
+              <p className="text-slate-600">
+                {facilities.length} fasilitas publik tersinkron otomatis ke lapisan peta. Pengelolaan CRUD tetap berada di modul Fasilitas Desa.
+              </p>
+              <button
+                type="button"
+                onClick={() => setActiveSubmenu('peta_layer')}
+                className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold inline-flex items-center gap-1.5"
+              >
+                <MapPin className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Lihat di Peta Utama</span>
+              </button>
+            </div>
+            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
+              <strong className="text-sm text-slate-900 block">Potensi PBB-P2 Terkalkulasi</strong>
+              <p className="text-slate-600">
+                Total ketetapan Rp {summary.totalPbbPotential.toLocaleString('id-ID')} ({summary.complianceRatePercent}% lunas).
+              </p>
+              <button
+                type="button"
+                onClick={() => setActiveSubmenu('peta_layer')}
+                className="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-bold inline-flex items-center gap-1.5"
+              >
+                <Printer className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Cetak SPPT di Peta</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeSubmenu === 'peta_layer' && (
+        <>
 
       {/* Banner GeoJSON Spatial Persistence */}
       <div className="bg-gradient-to-r from-emerald-900/10 via-emerald-800/10 to-slate-900/10 p-4.5 rounded-3xl border border-emerald-500/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs">
@@ -867,12 +1379,18 @@ export const WebGisManager: React.FC = () => {
             {/* Component Peta Leaflet */}
             <WebGisMap
               parcels={filteredParcels}
-              dusunBoundaries={dusunBoundaries}
+              dusunBoundaries={boundaryLayerState.dusunBoundaries}
+              villageBoundaries={boundaryLayerState.boundaryFeatures.filter((b) => b.showOnMap !== false)}
+              facilities={facilities}
               selectedParcelId={selectedParcelId}
               onSelectParcel={(parcel) => parcel && setSelectedParcelId(parcel.id)}
               isDrawingMode={isDrawingMode}
+              onToggleDrawingMode={() => setIsDrawingMode((prev) => !prev)}
               drawingPoints={drawingPoints}
               onDrawingPointsChange={setDrawingPoints}
+              onPrintReceipt={(parcel) => setReceiptParcel(parcel)}
+              onTriggerSporadik={handleTriggerSporadikLetter}
+              onNavigateSporadik={(trackingCode) => navigateTo('admin_services', { trackingCode })}
               height="520px"
             />
           </div>
@@ -968,17 +1486,36 @@ export const WebGisManager: React.FC = () => {
                               <span>SPPT</span>
                             </button>
 
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeleteParcelClick(p.id, p.ownerName);
-                              }}
-                              className="p-1.5 bg-white hover:bg-rose-50 text-slate-400 hover:text-rose-600 border border-slate-200 rounded-lg transition-colors"
-                              title="Hapus Bidang Spasial Ini"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            {confirmDeleteParcelId === p.id ? (
+                              <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                                <button
+                                  type="button"
+                                  onClick={() => handleConfirmDeleteParcel(p.id, p.ownerName)}
+                                  className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[11px] font-bold"
+                                >
+                                  Ya, Hapus
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteParcelId(null)}
+                                  className="px-2 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-[11px] font-bold"
+                                >
+                                  Batal
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setConfirmDeleteParcelId(p.id);
+                                }}
+                                className="p-1.5 bg-white hover:bg-rose-50 text-slate-400 hover:text-rose-600 border border-slate-200 rounded-lg transition-colors"
+                                title="Hapus Bidang Spasial Ini"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1084,6 +1621,8 @@ export const WebGisManager: React.FC = () => {
           )}
         </div>
       </div>
+        </>
+      )}
 
       {/* Modal Form Tambah Bidang Tanah Baru */}
       {isAddModalOpen && (

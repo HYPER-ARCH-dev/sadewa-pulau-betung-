@@ -34,7 +34,14 @@ import {
   PublicDemographics
 } from '../types';
 import { Resident } from '../types/resident';
-import { GisBootstrapPayload, GisTenantConfig } from '../types/webgis';
+import {
+  BoundaryVerificationStatus,
+  CreateVillageBoundaryInput,
+  GisBootstrapPayload,
+  GisTenantConfig,
+  GisVillageBoundary,
+  UpdateVillageBoundaryInput
+} from '../types/webgis';
 import { compressImage, isImageFile, formatFileSize } from '../utils/imageCompressor';
 import {
   getTenantAuthToken,
@@ -1665,6 +1672,133 @@ export const api = {
         body: JSON.stringify(payload)
       });
       return processResponse<GisTenantConfig>(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async getAdminGisBoundaries(): Promise<{ success: boolean; data?: GisVillageBoundary[]; error?: string }> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/gis/boundaries`, {
+        headers: getAuthHeaders()
+      });
+      return processResponse<GisVillageBoundary[]>(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async createAdminGisBoundary(
+    payload: CreateVillageBoundaryInput
+  ): Promise<{ success: boolean; data?: GisVillageBoundary; error?: string }> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/gis/boundaries`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(payload)
+      });
+      return processResponse<GisVillageBoundary>(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async createAdminGisBoundariesBatch(
+    items: CreateVillageBoundaryInput[]
+  ): Promise<{
+    success: boolean;
+    data?: { items?: GisVillageBoundary[]; boundaries?: GisVillageBoundary[] };
+    error?: string;
+  }> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/gis/boundaries/batch`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ items })
+      });
+      return processResponse<{ items?: GisVillageBoundary[]; boundaries?: GisVillageBoundary[] }>(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async updateAdminGisBoundary(
+    id: string,
+    payload: UpdateVillageBoundaryInput
+  ): Promise<{ success: boolean; data?: GisVillageBoundary; error?: string }> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/gis/boundaries/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(payload)
+      });
+      return processResponse<GisVillageBoundary>(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async verifyAdminGisBoundary(
+    id: string,
+    status: BoundaryVerificationStatus,
+    notes?: string | null
+  ): Promise<{ success: boolean; data?: GisVillageBoundary; error?: string }> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/gis/boundaries/${encodeURIComponent(id)}/verify`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ status, notes: notes ?? null })
+      });
+      return processResponse<GisVillageBoundary>(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async setActiveAdminGisBoundary(
+    id: string
+  ): Promise<{ success: boolean; data?: GisVillageBoundary; error?: string }> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/gis/boundaries/${encodeURIComponent(id)}/set-active`, {
+        method: 'PUT',
+        headers: getAuthHeaders()
+      });
+      return processResponse<GisVillageBoundary>(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async deleteAdminGisBoundary(id: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/gis/boundaries/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
+      });
+      return processResponse(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
+  async getAdminGisChangeLogs(): Promise<{
+    success: boolean;
+    data?: Array<{
+      id: string;
+      entityType: string;
+      entityId: string;
+      action: string;
+      actorName?: string | null;
+      note?: string | null;
+      createdAt: string;
+    }>;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch(`${BASE_URL}/admin/gis/changelogs`, {
+        headers: getAuthHeaders()
+      });
+      return processResponse(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }

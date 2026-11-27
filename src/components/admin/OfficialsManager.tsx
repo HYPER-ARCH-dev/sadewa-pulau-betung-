@@ -3,6 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { VillageOfficial } from '../../types';
 import { api } from '../../services/api';
 import { uploadImageService } from '../../services/uploadService';
+import { ConfirmDialogModal } from '../common/ConfirmDialogModal';
 import {
   Users,
   Plus,
@@ -72,6 +73,7 @@ export const OfficialsManager: React.FC = () => {
   const [isActive, setIsActive] = useState(true);
   const [displayOrder, setDisplayOrder] = useState(1);
   const [isUploading, setIsUploading] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -202,9 +204,7 @@ export const OfficialsManager: React.FC = () => {
   };
 
   const handleDelete = (id: string, officialName: string) => {
-    if (window.confirm(`Apakah Anda yakin ingin menghapus data perangkat "${officialName}" dari pangkalan data?`)) {
-      deleteOfficial(id);
-    }
+    setPendingDelete({ id, name: officialName });
   };
 
   // Sort officials by displayOrder ascending, fallback to name
@@ -789,6 +789,23 @@ export const OfficialsManager: React.FC = () => {
           </div>
         </div>
       )}
+
+      <ConfirmDialogModal
+        isOpen={Boolean(pendingDelete)}
+        title="Hapus Data Perangkat Desa"
+        message={
+          pendingDelete
+            ? `Apakah Anda yakin ingin menghapus data perangkat "${pendingDelete.name}" dari pangkalan data?`
+            : ''
+        }
+        confirmLabel="Ya, Hapus Perangkat"
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={() => {
+          if (!pendingDelete) return;
+          deleteOfficial(pendingDelete.id);
+          setPendingDelete(null);
+        }}
+      />
     </div>
   );
 };

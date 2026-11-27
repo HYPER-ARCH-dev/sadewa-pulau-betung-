@@ -5,6 +5,7 @@ import { BansosRecipient } from '../../types/bansos';
 import { SadewaHouseLogo } from '../common/SadewaHouseLogo';
 import { useApp } from '../../context/AppContext';
 import { printRawHtml } from '../../utils/printHelper';
+import { openExternalLink } from '../../utils/externalNavigation';
 import {
   Printer,
   Share2,
@@ -133,7 +134,7 @@ _Harap bawa KTP Asli & KK Asli saat pengambilan. 100% Bebas Biaya._`;
       `_Pemerintah Desa Pulau Betung &bull; Layanan Cek Bansos Transparan_`;
 
     const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
-    window.open(url, '_blank');
+    openExternalLink(url);
   };
 
   return (

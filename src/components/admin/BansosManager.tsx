@@ -7,6 +7,7 @@ import { BansosImportModal } from './BansosImportModal';
 import { BansosReceiptModal } from '../public/BansosReceiptModal';
 import { BansosBatchPrintModal } from './BansosBatchPrintModal';
 import { KpmTable } from '../KpmTable';
+import { ConfirmDialogModal } from '../common/ConfirmDialogModal';
 import {
   Search,
   Plus,
@@ -73,6 +74,7 @@ export const BansosManager: React.FC = () => {
   // Multi-Selection State for Batch Operations
   const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
   const [isBatchPrintModalOpen, setIsBatchPrintModalOpen] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
 
   const [formData, setFormData] = useState<Omit<BansosRecipient, 'id' | 'createdAt'>>({
     nik: '',
@@ -229,10 +231,7 @@ export const BansosManager: React.FC = () => {
   };
 
   const handleDelete = (id: string, name: string) => {
-    if (window.confirm(`Apakah Anda yakin ingin menghapus data KPM ${name}?`)) {
-      deleteBansosRecipient(id);
-      addToast('info', 'Data KPM Dihapus', `Data ${name} berhasil dihapus dari sistem.`);
-    }
+    setPendingDelete({ id, name });
   };
 
   const handleQuickStatusChange = (id: string, newStatus: BansosStatus) => {
@@ -827,6 +826,24 @@ export const BansosManager: React.FC = () => {
         villageAddress={villageProfile?.addressStreet || 'Jl. Lintas Jambi - Muara Bulian KM. 35, Kec. Pemayung, Kab. Batang Hari'}
         kadesName={villageProfile?.kadesName || 'M. Yamin, S.Pd'}
         onToast={addToast}
+      />
+
+      <ConfirmDialogModal
+        isOpen={Boolean(pendingDelete)}
+        title="Hapus Data Penerima Bansos"
+        message={
+          pendingDelete
+            ? `Apakah Anda yakin ingin menghapus data KPM "${pendingDelete.name}" dari daftar penerima?`
+            : ''
+        }
+        confirmLabel="Ya, Hapus KPM"
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={() => {
+          if (!pendingDelete) return;
+          deleteBansosRecipient(pendingDelete.id);
+          addToast('info', 'Data KPM Dihapus', `Data ${pendingDelete.name} berhasil dihapus dari sistem.`);
+          setPendingDelete(null);
+        }}
       />
     </div>
   );

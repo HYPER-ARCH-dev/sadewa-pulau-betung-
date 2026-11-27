@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { UmkmProduct } from '../../types';
+import { openExternalLink } from '../../utils/externalNavigation';
 import {
   ShoppingBag,
   Phone,
@@ -40,7 +41,7 @@ export const UmkmView: React.FC = () => {
     const message = encodeURIComponent(
       `Halo ${product.ownerName}, saya melihat produk "${product.name}" di Website Resmi Desa Pulau Betung. Apakah stok produk masih tersedia? Terima kasih.`
     );
-    window.open(`https://wa.me/${formattedPhone}?text=${message}`, '_blank');
+    openExternalLink(`https://wa.me/${formattedPhone}?text=${message}`);
   };
 
   const handleRegisterSubmit = (e: React.FormEvent) => {

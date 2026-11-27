@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
 import { useResidents } from '../../hooks/useResidents';
 import { Resident } from '../../types/resident';
+import { ConfirmDialogModal } from '../common/ConfirmDialogModal';
 import {
   Search,
   Plus,
@@ -83,6 +84,8 @@ export const PopulationManager: React.FC = () => {
   const [selectedGender, setSelectedGender] = useState('all');
   const [selectedAgeGroup, setSelectedAgeGroup] = useState('all');
   const [selectedOccupation, setSelectedOccupation] = useState('all');
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [selectedEducation, setSelectedEducation] = useState('all');
   const [showStuntingRiskOnly, setShowStuntingRiskOnly] = useState(false);
   const [showBansosOnly, setShowBansosOnly] = useState(false);
@@ -399,10 +402,19 @@ export const PopulationManager: React.FC = () => {
     addToast('success', 'Format Dirapikan', `Berhasil membersihkan format Nama & NIK pada ${success} data penduduk.`);
   };
 
-  const handleDelete = async (id: string, name: string) => {
-    if (window.confirm(`Hapus data penduduk ${name}? Tindakan ini permanen.`)) {
-      await deleteResident(id);
-      addToast('info', 'Dihapus', `Data ${name} telah dihapus.`);
+  const handleDelete = (id: string, name: string) => {
+    setPendingDelete({ id, name });
+  };
+
+  const confirmDeleteResident = async () => {
+    if (!pendingDelete) return;
+    setIsDeleting(true);
+    try {
+      await deleteResident(pendingDelete.id);
+      addToast('info', 'Dihapus', `Data ${pendingDelete.name} telah dihapus.`);
+      setPendingDelete(null);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -1556,6 +1568,20 @@ export const PopulationManager: React.FC = () => {
       <SmartStatsModal 
         isOpen={isImportModalOpen} 
         onClose={() => setIsImportModalOpen(false)} 
+      />
+
+      <ConfirmDialogModal
+        isOpen={Boolean(pendingDelete)}
+        title="Hapus Data Penduduk"
+        message={
+          pendingDelete
+            ? `Hapus data penduduk "${pendingDelete.name}"? Tindakan ini bersifat permanen.`
+            : ''
+        }
+        confirmLabel="Ya, Hapus Data"
+        isProcessing={isDeleting}
+        onCancel={() => !isDeleting && setPendingDelete(null)}
+        onConfirm={confirmDeleteResident}
       />
     </div>
   );

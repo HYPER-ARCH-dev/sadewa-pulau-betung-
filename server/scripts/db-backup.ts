@@ -77,11 +77,38 @@ export const BACKUP_MODELS = [
   'toddlerMeasurement',
   'posyanduSchedule',
   'auditLog',
-  'attendanceLog'
+  'attendanceLog',
+  'gisTenantConfig',
+  'gisVillageBoundary',
+  'gisRoad',
+  'gisInfrastructure',
+  'gisPotentialArea',
+  'gisDataSource',
+  'gisImportJob',
+  'gisChangeLog'
 ] as const;
+
+const OPTIONAL_GIS_MODELS = new Set<string>([
+  'gisTenantConfig',
+  'gisVillageBoundary',
+  'gisRoad',
+  'gisInfrastructure',
+  'gisPotentialArea',
+  'gisDataSource',
+  'gisImportJob',
+  'gisChangeLog'
+]);
 
 // Urutan aman untuk deleteMany (child sebelum parent FK) dan createMany (parent sebelum child FK)
 const RESTORE_DELETE_ORDER = [
+  'gisChangeLog',
+  'gisImportJob',
+  'gisDataSource',
+  'gisPotentialArea',
+  'gisInfrastructure',
+  'gisRoad',
+  'gisVillageBoundary',
+  'gisTenantConfig',
   'toddlerMeasurement',
   'toddlerRecord',
   'bansosRecipient',
@@ -147,10 +174,23 @@ export async function buildTenantSnapshotPayload(
   const backupPayload: Record<string, any> = {};
 
   for (const model of BACKUP_MODELS) {
-    const rows = await (prisma as any)[model].findMany(
-      tenantId ? { where: { villageId: tenantId } } : undefined
-    );
-    backupPayload[model] = model === 'user' ? sanitizeBackupUsers(rows) : rows;
+    const delegate = (prisma as any)[model];
+    if (!delegate || typeof delegate.findMany !== 'function') {
+      backupPayload[model] = [];
+      continue;
+    }
+    try {
+      const rows = await delegate.findMany(
+        tenantId ? { where: { villageId: tenantId } } : undefined
+      );
+      backupPayload[model] = model === 'user' ? sanitizeBackupUsers(rows) : rows;
+    } catch (err: any) {
+      if (OPTIONAL_GIS_MODELS.has(model) && err?.code === 'P2021') {
+        backupPayload[model] = [];
+      } else {
+        throw err;
+      }
+    }
   }
 
   return {
@@ -380,13 +420,27 @@ export async function restoreTenantBackupSnapshot(
   await (targetPrisma as any).$transaction(async (tx: any) => {
     // 1. Bersihkan data operasional HANYA milik tenant target (tidak pernah global deleteMany({}))
     for (const model of RESTORE_DELETE_ORDER) {
-      await tx[model].deleteMany({ where: { villageId: cleanTenantId } });
+      const delegate = tx[model];
+      if (!delegate || typeof delegate.deleteMany !== 'function') continue;
+      try {
+        await delegate.deleteMany({ where: { villageId: cleanTenantId } });
+      } catch (err: any) {
+        if (!(OPTIONAL_GIS_MODELS.has(model) && err?.code === 'P2021')) {
+          throw err;
+        }
+      }
     }
 
     // 2. Pulihkan baris dalam urutan parent -> child dan paksa stempel villageId = targetTenantId
     for (const model of RESTORE_INSERT_ORDER) {
       const rawRows = data[model];
       if (!Array.isArray(rawRows) || rawRows.length === 0) {
+        restoredModels[model] = 0;
+        continue;
+      }
+
+      const delegate = tx[model];
+      if (!delegate) {
         restoredModels[model] = 0;
         continue;
       }
@@ -404,19 +458,26 @@ export async function restoreTenantBackupSnapshot(
         return cloned;
       });
 
-      if (typeof tx[model].createMany === 'function') {
-        await tx[model].createMany({
-          data: preparedRows,
-          skipDuplicates: true
-        });
-      } else {
-        for (const item of preparedRows) {
-          await tx[model].create({ data: item });
+      try {
+        if (typeof delegate.createMany === 'function') {
+          await delegate.createMany({
+            data: preparedRows,
+            skipDuplicates: true
+          });
+        } else {
+          for (const item of preparedRows) {
+            await delegate.create({ data: item });
+          }
+        }
+        restoredModels[model] = preparedRows.length;
+        totalRowsRestored += preparedRows.length;
+      } catch (err: any) {
+        if (OPTIONAL_GIS_MODELS.has(model) && err?.code === 'P2021') {
+          restoredModels[model] = 0;
+        } else {
+          throw err;
         }
       }
-
-      restoredModels[model] = preparedRows.length;
-      totalRowsRestored += preparedRows.length;
     }
   });
 

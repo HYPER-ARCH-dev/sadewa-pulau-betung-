@@ -11,9 +11,11 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
+        manifest: false,
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,jpg}'],
           maximumFileSizeToCacheInBytes: 5000000,
+          navigateFallbackDenylist: [/^\/api\//, /^\/uploads\//, /^\/manifest\.webmanifest$/],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/tiles\.openfreemap\.org\/.*/i,
@@ -43,37 +45,6 @@ export default defineConfig(() => {
                 },
               },
             }
-          ]
-        },
-        manifest: {
-          id: '/',
-          name: 'SADEWA - Portal Desa Pulau Betung',
-          short_name: 'SADEWA',
-          description: 'Sistem Informasi dan Layanan Administrasi Digital Desa Pulau Betung',
-          theme_color: '#047857',
-          background_color: '#ffffff',
-          display: 'standalone',
-          start_url: '/',
-          scope: '/',
-          icons: [
-            {
-              src: '/pwa-192x192.png',
-              sizes: '192x192',
-              type: 'image/png',
-              purpose: 'any',
-            },
-            {
-              src: '/pwa-512x512.png',
-              sizes: '512x512',
-              type: 'image/png',
-              purpose: 'any',
-            },
-            {
-              src: '/pwa-maskable-512x512.png',
-              sizes: '512x512',
-              type: 'image/png',
-              purpose: 'maskable',
-            },
           ]
         }
       })

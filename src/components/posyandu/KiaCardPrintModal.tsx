@@ -8,6 +8,7 @@ import { generateVerificationQrCode } from '../../utils/qrHelper';
 import { calculateAgeInMonths } from '../../utils/whoZScoreCalculator';
 import { SadewaHouseLogo } from '../common/SadewaHouseLogo';
 import { uploadImageService } from '../../services/uploadService';
+import { openExternalLink } from '../../utils/externalNavigation';
 import {
   Printer,
   X,
@@ -229,7 +230,7 @@ export const KiaCardPrintModal: React.FC<KiaCardPrintModalProps> = ({
       `Silakan simpan nomor KIA ini. Harap selalu membawa Buku/Kartu KIA saat jadwal penimbangan rutin Posyandu bulanan untuk pemantauan tumbuh kembang dan imunisasi lengkap.\n\n` +
       `_Salam Hangat, Bidan Desa & Tim Pendamping Keluarga (TPK) ${villageProfile.villageName || 'Desa Pulau Betung'}_`;
 
-    window.open(`https://wa.me/${formattedPhone}?text=${encodeURIComponent(text)}`, '_blank');
+    openExternalLink(`https://wa.me/${formattedPhone}?text=${encodeURIComponent(text)}`);
     addToast('success', 'WhatsApp Terbuka', 'Pesan rincian Kartu KIA siap dikirim ke nomor orang tua.');
   };
 

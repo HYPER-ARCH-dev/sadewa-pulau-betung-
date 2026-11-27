@@ -5,6 +5,7 @@ import { BansosProgramType, BansosRecipient } from '../../types/bansos';
 import { BANSOS_PROGRAM_LIST } from '../../data/bansosData';
 import { useKpmData } from '../../hooks/useKpmData';
 import { BansosReceiptModal } from './BansosReceiptModal';
+import { openExternalLink } from '../../utils/externalNavigation';
 import {
   Search,
   ShieldCheck,
@@ -226,7 +227,7 @@ export const BansosCheckView: React.FC = () => {
   const shareViaWhatsApp = (recipient: BansosRecipient) => {
     const text = `*INFORMASI PENYALURAN BANSOS DESA PULAU BETUNG*\n\nNama: ${recipient.nameMasked}\nProgram: ${recipient.programName}\nStatus: ${recipient.status === 'siap_diambil' ? 'SIAP DIAMBIL' : recipient.status === 'tersalurkan' ? 'TELAH TERSALURKAN' : 'PROSES VERIFIKASI'}\nJadwal: ${recipient.distributionDate || 'Menunggu Pengumuman'}\nLokasi: ${recipient.distributionLocation || 'Kantor Desa Pulau Betung'}\n\n_Pastikan membawa KTP & KK Asli saat pengambilan._`;
     const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
-    window.open(url, '_blank');
+    openExternalLink(url);
   };
 
   return (

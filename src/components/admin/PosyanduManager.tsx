@@ -11,6 +11,7 @@ import { useToddlers } from '../../hooks/useToddlers';
 import { useResidents } from '../../hooks/useResidents';
 import { useServiceRequests } from '../../hooks/useServiceRequests';
 import { resolveMapViewport } from '../../utils/gisAdapter';
+import { openExternalLink } from '../../utils/externalNavigation';
 import {
   Baby,
   Plus,
@@ -309,14 +310,14 @@ export const PosyanduManager: React.FC = () => {
       `_Pemerintah ${villageProfile.villageName || 'Desa'} & Bidan Desa Pemayung_`;
 
     const waUrl = `https://wa.me/${phoneClean.startsWith('0') ? '62' + phoneClean.slice(1) : phoneClean}?text=${encodeURIComponent(message)}`;
-    window.open(waUrl, '_blank');
+    openExternalLink(waUrl);
   };
 
   const handleSendWaBroadcast = (sch: PosyanduSchedule) => {
     const text = `*PENGINGAT JADWAL POSYANDU ${sch.posyanduName.toUpperCase()}*\n\nKepada Yth. Ibu-Ibu Orang Tua Balita di *${sch.dusunName}*,\n\nMengingatkan kembali agenda penimbangan, imunisasi & pengukuran tumbuh kembang balita:\n🗓 *Hari/Tgl:* ${sch.scheduleDate}\n⏰ *Waktu:* ${sch.startTime} - ${sch.endTime} WIB\n📍 *Lokasi:* ${sch.location}\n👩‍⚕️ *Bidan/Kader:* ${sch.bidanInCharge} (${sch.cadreInCharge})\n\n📌 *Catatan:* ${sch.notes || 'Harap membawa Buku KIA / Kartu KMS Balita.'}\n\nMari bersama kita cegah stunting demi masa depan anak-anak ${villageProfile?.villageName || 'Desa Pulau Betung'}!`;
 
     const encodedText = encodeURIComponent(text);
-    window.open(`https://api.whatsapp.com/send?text=${encodedText}`, '_blank');
+    openExternalLink(`https://api.whatsapp.com/send?text=${encodedText}`);
     addToast('success', 'WhatsApp Terbuka', `Pesan broadcast jadwal Posyandu ${sch.posyanduName} siap dikirim.`);
   };
 

@@ -83,6 +83,8 @@ import { WhatsAppService, generateWAMessage, buildWhatsAppShareUrl } from '../..
 import { getLetterVerificationUrl } from '../../utils/qrHelper';
 import { Skeleton, TableSkeleton, CardSkeleton } from '../common/Skeleton';
 import { useResidents } from '../../hooks/useResidents';
+import { ConfirmDialogModal } from '../common/ConfirmDialogModal';
+import { openExternalLink } from '../../utils/externalNavigation';
 
 export const AdminDashboard: React.FC = () => {
   const {
@@ -188,6 +190,7 @@ export const AdminDashboard: React.FC = () => {
   const [notifyViaWA, setNotifyViaWA] = useState(false);
   const [printModalRequest, setPrintModalRequest] = useState<ServiceRequest | null>(null);
   const [adminPreviewImage, setAdminPreviewImage] = useState<string | null>(null);
+  const [pendingDeleteRequest, setPendingDeleteRequest] = useState<ServiceRequest | null>(null);
   const [adminIsLoading, setAdminIsLoading] = useState(false);
 
   // Branding & Logo Management States (Restricted to Super Admin)
@@ -464,7 +467,7 @@ export const AdminDashboard: React.FC = () => {
       requirements: getServiceRequirements(request.serviceName),
       isGatewayActive: true
     });
-    window.open(buildWhatsAppShareUrl(request.phone || '', msg), '_blank');
+    openExternalLink(buildWhatsAppShareUrl(request.phone || '', msg));
   };
 
   const handleSaveComplaintStatus = (e: React.FormEvent) => {
@@ -1878,11 +1881,7 @@ export const AdminDashboard: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    if (window.confirm(`Yakin ingin menghapus berkas pengajuan / uji coba ${selectedRequest.trackingCode} (${selectedRequest.citizenName}) secara permanen?`)) {
-                      deleteServiceRequest(selectedRequest.id);
-                      setSelectedRequest(null);
-                      addToast('info', 'Data Dihapus', `Berkas permohonan ${selectedRequest.trackingCode} berhasil dihapus.`);
-                    }
+                    setPendingDeleteRequest(selectedRequest);
                   }}
                   className="px-3.5 py-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs flex items-center space-x-1.5 transition-colors cursor-pointer self-start sm:self-auto"
                   title="Hapus berkas ini (berguna untuk membersihkan data uji coba)"
@@ -2244,6 +2243,29 @@ export const AdminDashboard: React.FC = () => {
         </div>
       )}
       </AnimatePresence>
+
+      <ConfirmDialogModal
+        isOpen={Boolean(pendingDeleteRequest)}
+        title="Hapus Berkas Permohonan"
+        message={
+          pendingDeleteRequest
+            ? `Yakin ingin menghapus berkas pengajuan ${pendingDeleteRequest.trackingCode} (${pendingDeleteRequest.citizenName}) secara permanen?`
+            : ''
+        }
+        confirmLabel="Ya, Hapus Berkas"
+        onCancel={() => setPendingDeleteRequest(null)}
+        onConfirm={() => {
+          if (!pendingDeleteRequest) return;
+          deleteServiceRequest(pendingDeleteRequest.id);
+          addToast(
+            'info',
+            'Data Dihapus',
+            `Berkas permohonan ${pendingDeleteRequest.trackingCode} berhasil dihapus.`
+          );
+          setPendingDeleteRequest(null);
+          setSelectedRequest(null);
+        }}
+      />
     </div>
   );
 };

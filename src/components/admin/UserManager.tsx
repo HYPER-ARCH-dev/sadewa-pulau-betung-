@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { api } from '../../services/api';
+import { ConfirmDialogModal } from '../common/ConfirmDialogModal';
 import {
   Users,
   Plus,
@@ -57,6 +58,8 @@ export const UserManager: React.FC = () => {
   const [resetModalOpen, setResetModalOpen] = useState(false);
   const [targetResetUser, setTargetResetUser] = useState<UserItem | null>(null);
   const [newPassword, setNewPassword] = useState('');
+  const [pendingDeleteUser, setPendingDeleteUser] = useState<UserItem | null>(null);
+  const [isDeletingUser, setIsDeletingUser] = useState(false);
 
   const MODULE_OPTIONS = [
     { id: 'services', label: 'Buku Arsip & Surat' },
@@ -193,14 +196,23 @@ export const UserManager: React.FC = () => {
       return;
     }
 
-    if (!window.confirm(`Hapus akun ${user.username} (${user.name})? Tindakan ini permanen.`)) return;
+    setPendingDeleteUser(user);
+  };
 
-    const res = await api.deleteUser(user.id);
-    if (res.success) {
-      addToast('success', 'Akun Dihapus', `Akun ${user.username} telah dihapus dari sistem.`);
-      fetchUsers();
-    } else {
-      addToast('error', 'Gagal Hapus', res.error || 'Terjadi kesalahan.');
+  const confirmDeleteUser = async () => {
+    if (!pendingDeleteUser) return;
+    setIsDeletingUser(true);
+    try {
+      const res = await api.deleteUser(pendingDeleteUser.id);
+      if (res.success) {
+        addToast('success', 'Akun Dihapus', `Akun ${pendingDeleteUser.username} telah dihapus dari sistem.`);
+        setPendingDeleteUser(null);
+        fetchUsers();
+      } else {
+        addToast('error', 'Gagal Hapus', res.error || 'Terjadi kesalahan.');
+      }
+    } finally {
+      setIsDeletingUser(false);
     }
   };
 
@@ -631,6 +643,20 @@ export const UserManager: React.FC = () => {
           </div>
         </div>
       )}
+
+      <ConfirmDialogModal
+        isOpen={Boolean(pendingDeleteUser)}
+        title="Hapus Akun Petugas"
+        message={
+          pendingDeleteUser
+            ? `Hapus akun "${pendingDeleteUser.username}" (${pendingDeleteUser.name})? Tindakan ini bersifat permanen.`
+            : ''
+        }
+        confirmLabel="Ya, Hapus Akun"
+        isProcessing={isDeletingUser}
+        onCancel={() => !isDeletingUser && setPendingDeleteUser(null)}
+        onConfirm={confirmDeleteUser}
+      />
     </div>
   );
 };

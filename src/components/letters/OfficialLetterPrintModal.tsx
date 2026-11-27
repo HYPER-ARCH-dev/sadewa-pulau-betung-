@@ -12,6 +12,7 @@ import { sanitizeText, getUnmaskedOfficialNik } from './sanitizer';
 import { resolveLetterTemplate } from './templates';
 import { createLetterVillageContext } from './villageContext';
 import { SadewaHouseLogo } from '../common/SadewaHouseLogo';
+import { openExternalLink } from '../../utils/externalNavigation';
 
 export * from './types';
 export * from './sanitizer';
@@ -280,7 +281,7 @@ export const OfficialLetterPrintModal: React.FC<OfficialLetterPrintModalProps> =
       requirements: matchedService?.requirements,
       isDraft: showDraftWatermark
     });
-    window.open(notifyRes.shareUrl, '_blank');
+    openExternalLink(notifyRes.shareUrl);
   };
 
   // Create unified dynamic village context for all letter templates

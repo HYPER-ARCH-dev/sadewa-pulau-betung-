@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { UmkmItem } from '../../types';
+import { ConfirmDialogModal } from '../common/ConfirmDialogModal';
 import {
   ShoppingBag,
   Plus,
@@ -19,6 +20,7 @@ export const UmkmManager: React.FC = () => {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
 
   // Form states
   const [name, setName] = useState('');
@@ -69,9 +71,7 @@ export const UmkmManager: React.FC = () => {
   };
 
   const handleDelete = (id: string, umkmName: string) => {
-    if (window.confirm(`Hapus UMKM "${umkmName}" dari direktori pasar desa?`)) {
-      deleteUmkmItem(id);
-    }
+    setPendingDelete({ id, name: umkmName });
   };
 
   const filtered = umkm.filter((u) =>
@@ -307,6 +307,23 @@ export const UmkmManager: React.FC = () => {
           </div>
         </div>
       )}
+
+      <ConfirmDialogModal
+        isOpen={Boolean(pendingDelete)}
+        title="Hapus Data UMKM"
+        message={
+          pendingDelete
+            ? `Hapus UMKM "${pendingDelete.name}" dari direktori pasar desa?`
+            : ''
+        }
+        confirmLabel="Ya, Hapus UMKM"
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={() => {
+          if (!pendingDelete) return;
+          deleteUmkmItem(pendingDelete.id);
+          setPendingDelete(null);
+        }}
+      />
     </div>
   );
 };

@@ -454,3 +454,40 @@
   display: none !important;
 }
 
+/* =========================================================================
+ * WEBGIS MARKER CLUSTERING - SADEWA PUBLIC MAP
+ * ========================================================================= */
+.marker-cluster-small {
+  background-color: rgba(16, 185, 129, 0.35) !important;
+}
+.marker-cluster-small div {
+  background-color: #047857 !important;
+  color: #ffffff !important;
+  font-weight: 800 !important;
+  border: 2px solid #ffffff !important;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
+}
+.marker-cluster-medium {
+  background-color: rgba(245, 158, 11, 0.38) !important;
+}
+.marker-cluster-medium div {
+  background-color: #d97706 !important;
+  color: #ffffff !important;
+  font-weight: 800 !important;
+  border: 2px solid #ffffff !important;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
+}
+.marker-cluster-large {
+  background-color: rgba(225, 29, 72, 0.38) !important;
+}
+.marker-cluster-large div {
+  background-color: #e11d48 !important;
+  color: #ffffff !important;
+  font-weight: 800 !important;
+  border: 2px solid #ffffff !important;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
+}
+.marker-cluster span {
+  line-height: 26px !important;
+}
+

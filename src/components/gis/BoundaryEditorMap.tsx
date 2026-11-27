@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -23,15 +23,63 @@ import {
   resolveMapViewport
 } from '../../utils/gisAdapter';
 import {
+  Check,
   Compass,
+  Crosshair,
   Edit3,
   Eye,
-  Navigation,
+  Info,
+  Layers,
+  LayoutGrid,
+  MapPin,
+  Maximize2,
+  Minimize2,
+  Pentagon,
   RotateCcw,
+  Tag,
   Trash2,
   Undo2,
-  Info
+  X
 } from 'lucide-react';
+
+const ADM_MAP_SESSION_KEYS = {
+  mapMode: 'sadewa_adm_map_mode',
+  showSaved: 'sadewa_adm_show_saved',
+  showDusun: 'sadewa_adm_show_dusun',
+  showFacility: 'sadewa_adm_show_facility',
+  showLabels: 'sadewa_adm_show_labels'
+} as const;
+
+function readSessionBool(key: string, fallback: boolean): boolean {
+  try {
+    const raw = window.sessionStorage.getItem(key);
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+  } catch {
+    // Ignore storage access errors
+  }
+  return fallback;
+}
+
+function readSessionMapMode(fallback: MapMode): MapMode {
+  try {
+    const raw = window.sessionStorage.getItem(ADM_MAP_SESSION_KEYS.mapMode);
+    if (raw === 'roadmap' || raw === 'satellite' || raw === 'hybrid' || raw === 'terrain') {
+      return raw;
+    }
+  } catch {
+    // Ignore storage access errors
+  }
+  return fallback;
+}
+
+function writeSessionValue(key: string, value: string): void {
+  try {
+    window.sessionStorage.setItem(key, value);
+  } catch {
+    // Ignore storage access errors
+  }
+}
 
 interface BoundaryEditorMapProps {
   points: [number, number][];
@@ -67,20 +115,180 @@ export const BoundaryEditorMap: React.FC<BoundaryEditorMapProps> = ({
   height = '480px'
 }) => {
   const { villageProfile, gisBootstrap } = useApp();
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const basemapCleanupRef = useRef<(() => void) | null>(null);
   const referenceLayerRef = useRef<L.LayerGroup | null>(null);
   const editorLayerRef = useRef<L.LayerGroup | null>(null);
+  const layerMenuContainerRef = useRef<HTMLDivElement>(null);
   const hasInitializedViewportRef = useRef(false);
+  const nativeFullscreenActiveRef = useRef(false);
 
-  const [mapMode, setMapMode] = useState<MapMode>(
-    gisBootstrap?.config?.defaultMapMode || 'roadmap'
+  const [mapMode, setMapMode] = useState<MapMode>(() =>
+    readSessionMapMode(gisBootstrap?.config?.defaultMapMode || 'roadmap')
   );
   const [providerNotice, setProviderNotice] = useState<string | null>(null);
-  const [showSavedLayer, setShowSavedLayer] = useState(true);
-  const [showDusunLayer, setShowDusunLayer] = useState(true);
-  const [showFacilityLayer, setShowFacilityLayer] = useState(true);
+  const [providerLabel, setProviderLabel] = useState<string>('Peta Jalan');
+  const [showSavedLayer, setShowSavedLayer] = useState<boolean>(() =>
+    readSessionBool(ADM_MAP_SESSION_KEYS.showSaved, true)
+  );
+  const [showDusunLayer, setShowDusunLayer] = useState<boolean>(() =>
+    readSessionBool(ADM_MAP_SESSION_KEYS.showDusun, true)
+  );
+  const [showFacilityLayer, setShowFacilityLayer] = useState<boolean>(() =>
+    readSessionBool(ADM_MAP_SESSION_KEYS.showFacility, true)
+  );
+  const [showLabels, setShowLabels] = useState<boolean>(() =>
+    readSessionBool(ADM_MAP_SESSION_KEYS.showLabels, false)
+  );
+
+  const [isLayerMenuOpen, setIsLayerMenuOpen] = useState(false);
+  const [showMetricsPopup, setShowMetricsPopup] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    writeSessionValue(ADM_MAP_SESSION_KEYS.mapMode, mapMode);
+  }, [mapMode]);
+
+  useEffect(() => {
+    writeSessionValue(ADM_MAP_SESSION_KEYS.showSaved, String(showSavedLayer));
+  }, [showSavedLayer]);
+
+  useEffect(() => {
+    writeSessionValue(ADM_MAP_SESSION_KEYS.showDusun, String(showDusunLayer));
+  }, [showDusunLayer]);
+
+  useEffect(() => {
+    writeSessionValue(ADM_MAP_SESSION_KEYS.showFacility, String(showFacilityLayer));
+  }, [showFacilityLayer]);
+
+  useEffect(() => {
+    writeSessionValue(ADM_MAP_SESSION_KEYS.showLabels, String(showLabels));
+  }, [showLabels]);
+
+  useEffect(() => {
+    if (points.length === 0 && confirmClear) {
+      setConfirmClear(false);
+    }
+  }, [points.length, confirmClear]);
+
+  useEffect(() => {
+    if (!isLayerMenuOpen) return;
+    const handleOutside = (e: MouseEvent | TouchEvent) => {
+      if (
+        layerMenuContainerRef.current &&
+        !layerMenuContainerRef.current.contains(e.target as Node)
+      ) {
+        setIsLayerMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('touchstart', handleOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('touchstart', handleOutside);
+    };
+  }, [isLayerMenuOpen]);
+
+  const enterFullscreen = useCallback(async () => {
+    setIsFullscreen(true);
+    const el = wrapperRef.current as
+      | (HTMLDivElement & { webkitRequestFullscreen?: () => Promise<void> | void })
+      | null;
+    if (!el) return;
+    try {
+      if (typeof el.requestFullscreen === 'function') {
+        await el.requestFullscreen();
+        nativeFullscreenActiveRef.current = true;
+      } else if (typeof el.webkitRequestFullscreen === 'function') {
+        await el.webkitRequestFullscreen();
+        nativeFullscreenActiveRef.current = true;
+      }
+    } catch {
+      nativeFullscreenActiveRef.current = false;
+    }
+  }, []);
+
+  const exitFullscreen = useCallback(async () => {
+    setIsFullscreen(false);
+    const doc = document as Document & { webkitExitFullscreen?: () => Promise<void> | void };
+    try {
+      if (document.fullscreenElement) {
+        nativeFullscreenActiveRef.current = false;
+        await document.exitFullscreen();
+      } else if (doc.webkitExitFullscreen && nativeFullscreenActiveRef.current) {
+        nativeFullscreenActiveRef.current = false;
+        await doc.webkitExitFullscreen();
+      }
+    } catch {
+      nativeFullscreenActiveRef.current = false;
+    }
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (isFullscreen) {
+      void exitFullscreen();
+    } else {
+      void enterFullscreen();
+    }
+  }, [isFullscreen, enterFullscreen, exitFullscreen]);
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      const doc = document as Document & { webkitFullscreenElement?: Element | null };
+      const fsEl = document.fullscreenElement || doc.webkitFullscreenElement || null;
+      if (!fsEl && nativeFullscreenActiveRef.current) {
+        nativeFullscreenActiveRef.current = false;
+        setIsFullscreen(false);
+      }
+    };
+    document.addEventListener('fullscreenchange', handleFsChange);
+    document.addEventListener('webkitfullscreenchange', handleFsChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFsChange);
+      document.removeEventListener('webkitfullscreenchange', handleFsChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        void exitFullscreen();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isFullscreen, exitFullscreen]);
+
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    let raf1 = 0;
+    let raf2 = 0;
+    raf1 = window.requestAnimationFrame(() => {
+      raf2 = window.requestAnimationFrame(() => {
+        map.invalidateSize({ animate: false });
+      });
+    });
+    const t = window.setTimeout(() => {
+      map.invalidateSize({ animate: false });
+    }, 180);
+    return () => {
+      if (raf1) window.cancelAnimationFrame(raf1);
+      if (raf2) window.cancelAnimationFrame(raf2);
+      window.clearTimeout(t);
+    };
+  }, [isFullscreen]);
 
   const pointsRef = useRef(points);
   pointsRef.current = points;
@@ -102,17 +310,19 @@ export const BoundaryEditorMap: React.FC<BoundaryEditorMapProps> = ({
     [gisBootstrap, villageProfile, activeFacilities]
   );
 
-  // Init Leaflet map once
+  // Init Leaflet map once (zoom at topleft so top-right floating stack & bottom-right attribution stay clear)
   useEffect(() => {
     if (!mapContainerRef.current || mapInstanceRef.current) return;
 
     const map = L.map(mapContainerRef.current, {
       center: viewport.center,
       zoom: viewport.zoom,
+      minZoom: 1,
+      maxZoom: 19,
       zoomControl: false
     });
 
-    L.control.zoom({ position: 'bottomright' }).addTo(map);
+    L.control.zoom({ position: 'topleft' }).addTo(map);
 
     const refLayer = L.layerGroup().addTo(map);
     const editLayer = L.layerGroup().addTo(map);
@@ -120,6 +330,10 @@ export const BoundaryEditorMap: React.FC<BoundaryEditorMapProps> = ({
     mapInstanceRef.current = map;
     referenceLayerRef.current = refLayer;
     editorLayerRef.current = editLayer;
+
+    map.on('click', () => {
+      setIsLayerMenuOpen(false);
+    });
 
     setTimeout(() => {
       map.invalidateSize();
@@ -152,6 +366,7 @@ export const BoundaryEditorMap: React.FC<BoundaryEditorMapProps> = ({
       activeProviderId: gisBootstrap?.config?.activeProviderId
     });
     basemapCleanupRef.current = handle.cleanup;
+    setProviderLabel(handle.provider.shortLabel);
     setProviderNotice(handle.fallbackReason || null);
 
     return () => {
@@ -207,7 +422,7 @@ export const BoundaryEditorMap: React.FC<BoundaryEditorMapProps> = ({
     };
   }, [isEditing]);
 
-  // Reference layers: saved boundaries (including neighbor villages), dusun boundaries, facilities
+  // Reference layers: saved boundaries (labels hidden by default, shown on hover/touch or Label toggle), dusun boundaries, facilities
   useEffect(() => {
     const group = referenceLayerRef.current;
     if (!group) return;
@@ -222,6 +437,7 @@ export const BoundaryEditorMap: React.FC<BoundaryEditorMapProps> = ({
         const isNeighbor = b.boundaryRole === 'NEIGHBOR_VILLAGE';
         const strokeColor =
           b.fillColor || (isNeighbor ? '#0284c7' : b.isActive ? boundaryColor : '#64748b');
+        const labelText = b.villageName || b.sourceName || 'Wilayah Desa';
 
         const polys = geoJsonGeometryToLeafletPolygons(b.geometryGeoJson);
         polys.forEach((rings, ringIdx) => {
@@ -231,19 +447,71 @@ export const BoundaryEditorMap: React.FC<BoundaryEditorMapProps> = ({
             dashArray: isNeighbor ? '5, 5' : b.isActive ? '6, 4' : '4, 4',
             fillColor: strokeColor,
             fillOpacity: isNeighbor ? 0.1 : b.isActive ? 0.08 : 0.04,
-            interactive: false
+            interactive: !isEditing
           });
 
-          if (ringIdx === 0) {
-            const labelEl = document.createElement('div');
-            labelEl.className = 'gis-boundary-clean-label';
-            labelEl.innerHTML = `<span style="font-weight: 800; font-size: 10px; color: ${strokeColor}; text-shadow: 0 0 3px #ffffff, 0 0 6px #ffffff, 1px 1px 0 #ffffff, -1px -1px 0 #ffffff; white-space: nowrap; pointer-events: none;">${b.villageName || b.sourceName || 'Wilayah Desa'}</span>`;
-            poly.bindTooltip(labelEl, {
-              permanent: true,
-              direction: 'top',
-              className: 'gis-boundary-clean-label',
-              offset: [0, -8]
+          let areaLabel = '';
+          if (typeof b.areaSqM === 'number' && b.areaSqM > 0) {
+            areaLabel = `${(b.areaSqM / 10000).toLocaleString('id-ID', { maximumFractionDigits: 1 })} Ha`;
+          } else if (rings.length > 0 && rings[0].length >= 3) {
+            const calc = calculatePolygonAreaShoelace(rings[0]);
+            if (calc.areaHectares > 0) areaLabel = calc.formattedAreaHectares;
+          }
+
+          if (showLabels) {
+            if (ringIdx === 0) {
+              const labelEl = document.createElement('div');
+              labelEl.className = 'gis-boundary-clean-label';
+              const spanEl = document.createElement('span');
+              spanEl.style.fontWeight = '800';
+              spanEl.style.fontSize = '10px';
+              spanEl.style.color = strokeColor;
+              spanEl.style.textShadow =
+                '0 0 3px #ffffff, 0 0 6px #ffffff, 1px 1px 0 #ffffff, -1px -1px 0 #ffffff';
+              spanEl.style.whiteSpace = 'nowrap';
+              spanEl.style.pointerEvents = 'none';
+              spanEl.textContent = labelText;
+              labelEl.appendChild(spanEl);
+              poly.bindTooltip(labelEl, {
+                permanent: true,
+                direction: 'top',
+                className: 'gis-boundary-clean-label',
+                offset: [0, -8]
+              });
+            }
+          } else {
+            const hoverTip = document.createElement('div');
+            hoverTip.className = 'font-sans text-xs text-slate-800 p-0.5';
+            const titleEl = document.createElement('strong');
+            titleEl.className = 'block text-xs font-bold text-slate-900';
+            titleEl.textContent = labelText;
+            hoverTip.appendChild(titleEl);
+            if (areaLabel) {
+              const areaEl = document.createElement('span');
+              areaEl.className = 'block text-[11px] font-semibold text-emerald-700';
+              areaEl.textContent = `Luas: ${areaLabel}`;
+              hoverTip.appendChild(areaEl);
+            }
+            poly.bindTooltip(hoverTip, {
+              permanent: false,
+              sticky: true
             });
+          }
+
+          if (!isEditing) {
+            const popupEl = document.createElement('div');
+            popupEl.className = 'font-sans text-xs text-slate-800 p-0.5';
+            const pTitle = document.createElement('strong');
+            pTitle.className = 'block text-xs font-bold text-slate-900';
+            pTitle.textContent = labelText;
+            popupEl.appendChild(pTitle);
+            if (areaLabel) {
+              const pArea = document.createElement('div');
+              pArea.className = 'text-[11px] font-semibold text-emerald-700 mt-0.5';
+              pArea.textContent = `Luas: ${areaLabel}`;
+              popupEl.appendChild(pArea);
+            }
+            poly.bindPopup(popupEl);
           }
 
           group.addLayer(poly);
@@ -260,8 +528,14 @@ export const BoundaryEditorMap: React.FC<BoundaryEditorMapProps> = ({
           dashArray: '6, 6',
           fillColor: d.color || '#10b981',
           fillOpacity: 0.05,
-          interactive: false
+          interactive: !isEditing
         });
+        if (!isEditing && d.name) {
+          const tip = document.createElement('div');
+          tip.className = 'font-sans text-xs font-bold text-slate-800';
+          tip.textContent = d.name;
+          poly.bindTooltip(tip, { permanent: false, sticky: true });
+        }
         group.addLayer(poly);
       });
     }
@@ -293,6 +567,7 @@ export const BoundaryEditorMap: React.FC<BoundaryEditorMapProps> = ({
     showSavedLayer,
     showDusunLayer,
     showFacilityLayer,
+    showLabels,
     savedBoundaries,
     editingBoundaryId,
     isEditing,
@@ -419,28 +694,25 @@ export const BoundaryEditorMap: React.FC<BoundaryEditorMapProps> = ({
 
   return (
     <div className="space-y-2.5">
-      {/* Toolbar Editor Batas Wilayah */}
-      <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 p-2.5 rounded-2xl border border-slate-200/80">
+      {/* Compact Icon Toolbar Editor Batas Wilayah */}
+      <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 p-2 rounded-2xl border border-slate-200/80">
         <div className="flex flex-wrap items-center gap-1.5">
           <button
             type="button"
             onClick={() => onToggleEditing(!isEditing)}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+            aria-label={isEditing ? 'Selesai edit peta' : 'Aktifkan edit / digitasi peta'}
+            title={isEditing ? 'Selesai Edit Peta' : 'Aktifkan Edit / Digitasi'}
+            aria-pressed={isEditing}
+            className={`w-10 h-10 rounded-xl transition-all flex items-center justify-center border cursor-pointer ${
               isEditing
-                ? 'bg-emerald-600 text-white shadow-xs'
-                : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                ? 'bg-emerald-600 text-white border-emerald-500 shadow-xs'
+                : 'bg-white/95 text-slate-700 border-slate-200 hover:bg-slate-100'
             }`}
           >
             {isEditing ? (
-              <>
-                <Eye className="w-3.5 h-3.5" />
-                <span>Selesai Edit Peta</span>
-              </>
+              <Eye className="w-4 h-4" />
             ) : (
-              <>
-                <Edit3 className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Aktifkan Edit / Digitasi</span>
-              </>
+              <Edit3 className="w-4 h-4 text-emerald-600" />
             )}
           </button>
 
@@ -448,148 +720,345 @@ export const BoundaryEditorMap: React.FC<BoundaryEditorMapProps> = ({
             type="button"
             disabled={!canUndo}
             onClick={onUndo}
-            className="px-2.5 py-1.5 rounded-xl text-xs font-bold bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
-            title="Kembalikan perubahan titik terakhir"
+            aria-label="Undo perubahan titik"
+            title="Undo (Kembalikan perubahan titik terakhir)"
+            className="w-10 h-10 rounded-xl bg-white/95 border border-slate-200 text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center cursor-pointer transition-all"
           >
-            <Undo2 className="w-3.5 h-3.5 text-amber-600" />
-            <span>Undo</span>
+            <Undo2 className="w-4 h-4 text-amber-600" />
           </button>
 
           <button
             type="button"
             disabled={!hasUnsavedChanges}
             onClick={onDiscardChanges}
-            className="px-2.5 py-1.5 rounded-xl text-xs font-bold bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
-            title="Batalkan semua perubahan yang belum disimpan"
+            aria-label="Batalkan semua perubahan"
+            title="Batal Perubahan (Reset ke data tersimpan)"
+            className="w-10 h-10 rounded-xl bg-white/95 border border-slate-200 text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center cursor-pointer transition-all"
           >
-            <RotateCcw className="w-3.5 h-3.5 text-rose-600" />
-            <span>Batal Perubahan</span>
+            <RotateCcw className="w-4 h-4 text-rose-600" />
           </button>
 
           {points.length > 0 && (
             <button
               type="button"
-              onClick={() => onChangePoints([])}
-              className="px-2.5 py-1.5 rounded-xl text-xs font-bold bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 flex items-center gap-1"
+              onClick={() => setConfirmClear((v) => !v)}
+              aria-label="Kosongkan titik poligon"
+              aria-expanded={confirmClear}
               title="Kosongkan seluruh titik poligon dari kanvas"
+              className={`w-10 h-10 rounded-xl border transition-all flex items-center justify-center cursor-pointer ${
+                confirmClear
+                  ? 'bg-rose-600 text-white border-rose-500 shadow-xs'
+                  : 'bg-white/95 border-rose-200 text-rose-600 hover:bg-rose-50'
+              }`}
             >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span>Kosongkan</span>
+              <Trash2 className="w-4 h-4" />
             </button>
           )}
+
+          <button
+            type="button"
+            onClick={handleFocusPolygonOrVillage}
+            aria-label="Pusatkan peta"
+            title="Pusatkan Ulang Peta"
+            className="w-10 h-10 rounded-xl bg-white/95 border border-slate-200 text-slate-700 hover:bg-slate-100 flex items-center justify-center cursor-pointer transition-all"
+          >
+            <Crosshair className="w-4 h-4 text-emerald-700" />
+          </button>
         </div>
 
-        <button
-          type="button"
-          onClick={handleFocusPolygonOrVillage}
-          className="px-3 py-1.5 rounded-xl text-xs font-bold bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 flex items-center gap-1.5"
-        >
-          <Navigation className="w-3.5 h-3.5 text-emerald-700" />
-          <span>Pusatkan</span>
-        </button>
+        <div className="flex items-center gap-2 text-[11px] font-semibold text-slate-600 pr-1">
+          {isEditing && (
+            <span className="text-emerald-700 font-bold">Mode Edit Aktif</span>
+          )}
+          <span className="px-2 py-0.5 rounded-lg bg-white border border-slate-200 font-mono text-[11px] text-slate-700">
+            {points.length} titik
+          </span>
+        </div>
       </div>
 
-      {/* Canvas Peta Leaflet */}
-      <div className="relative rounded-2xl overflow-hidden border border-slate-200 shadow-xs bg-slate-900">
-        <div ref={mapContainerRef} style={{ height }} className="w-full z-0" />
-
-        {/* Switch Basemap & Layer Referensi */}
-        <div className="absolute top-3 left-3 z-[1000] flex flex-wrap items-center gap-2 max-w-[calc(100%-2rem)]">
-          <div className="bg-white/95 backdrop-blur-md p-1 rounded-xl shadow-md border border-slate-200/80 flex flex-wrap items-center gap-1">
-            {MAP_MODE_OPTIONS.map((opt) => (
-              <button
-                key={opt.mode}
-                type="button"
-                onClick={() => setMapMode(opt.mode)}
-                className={`px-2 py-1 rounded-lg text-[11px] font-bold transition-all ${
-                  mapMode === opt.mode
-                    ? 'bg-emerald-600 text-white shadow-2xs'
-                    : 'text-slate-600 hover:bg-slate-100'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="bg-white/95 backdrop-blur-md px-2.5 py-1.5 rounded-xl shadow-md border border-slate-200/80 flex flex-wrap items-center gap-2 text-[11px] font-semibold text-slate-700">
-            <label className="flex items-center gap-1 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={showSavedLayer}
-                onChange={(e) => setShowSavedLayer(e.target.checked)}
-                className="rounded border-slate-300 text-pink-600 w-3.5 h-3.5"
-              />
-              <span>Batas Tersimpan</span>
-            </label>
-            <span className="text-slate-300">|</span>
-            <label className="flex items-center gap-1 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={showDusunLayer}
-                onChange={(e) => setShowDusunLayer(e.target.checked)}
-                className="rounded border-slate-300 text-emerald-600 w-3.5 h-3.5"
-              />
-              <span>Dusun</span>
-            </label>
-            <span className="text-slate-300">|</span>
-            <label className="flex items-center gap-1 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={showFacilityLayer}
-                onChange={(e) => setShowFacilityLayer(e.target.checked)}
-                className="rounded border-slate-300 text-blue-600 w-3.5 h-3.5"
-              />
-              <span>Fasilitas</span>
-            </label>
+      {/* Inline confirmation bar before destructive "Kosongkan" */}
+      {confirmClear && points.length > 0 && (
+        <div
+          role="alertdialog"
+          aria-label="Konfirmasi kosongkan titik poligon"
+          className="flex flex-wrap items-center justify-between gap-2 bg-rose-50 border border-rose-200 text-rose-900 px-3 py-2 rounded-xl text-xs"
+        >
+          <span className="font-semibold">
+            Kosongkan semua {points.length} titik poligon dari kanvas?
+          </span>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                onChangePoints([]);
+                setConfirmClear(false);
+              }}
+              className="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs transition-colors cursor-pointer"
+            >
+              Ya, Kosongkan
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmClear(false)}
+              className="px-3 py-1 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-bold text-xs transition-colors cursor-pointer"
+            >
+              Batal
+            </button>
           </div>
         </div>
+      )}
 
-        {providerNotice && (
-          <div className="absolute top-14 left-3 z-[1000] max-w-md bg-amber-50/95 backdrop-blur-sm border border-amber-200 text-amber-900 px-3 py-1.5 rounded-xl shadow text-[11px] flex items-center gap-1.5">
-            <Info className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+      {providerNotice && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-900 px-3 py-2 rounded-xl text-xs flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Info className="w-4 h-4 text-amber-700 shrink-0" />
             <span>{providerNotice}</span>
           </div>
-        )}
+          <button
+            type="button"
+            onClick={() => setProviderNotice(null)}
+            aria-label="Tutup pemberitahuan peta"
+            title="Tutup"
+            className="text-amber-700 hover:text-amber-900 p-0.5 cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
-        {/* Overlay Status & Kalkulasi Geometri Live */}
-        <div className="absolute bottom-3 left-3 z-[1000] bg-slate-900/95 backdrop-blur-md text-white px-3 py-2.5 rounded-2xl shadow-xl border border-slate-700/80 max-w-xs space-y-1">
-          <div className="flex items-center justify-between gap-2 text-[11px]">
-            <span className="font-bold text-emerald-400 flex items-center gap-1">
-              <Compass className="w-3.5 h-3.5" />
-              {isEditing ? 'Mode Edit Aktif (Klik / Geser Titik)' : 'Pratinjau Poligon Batas'}
-            </span>
-            <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-200 font-mono text-[10px]">
-              {points.length} titik
-            </span>
+      {/* Canvas Peta Leaflet */}
+      <div
+        ref={wrapperRef}
+        data-fullscreen={isFullscreen ? 'true' : 'false'}
+        className={
+          isFullscreen
+            ? 'fixed inset-0 z-[9900] w-screen h-screen rounded-none border-0 bg-slate-900 overflow-hidden'
+            : 'relative rounded-2xl overflow-hidden border border-slate-200 shadow-xs bg-slate-900'
+        }
+      >
+        <div
+          ref={mapContainerRef}
+          style={{ height: isFullscreen ? '100%' : height }}
+          className="w-full z-0"
+        />
+
+        {/* Vertical Floating Icon Controls (Top-Right, 40x40px semi-transparent, matching Public Map) */}
+        <div
+          ref={layerMenuContainerRef}
+          className="absolute top-3 right-3 z-[1000] flex flex-col items-end gap-1.5"
+        >
+          {/* 1. Layer Peta + Auto-closing Popover Menu */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setIsLayerMenuOpen((v) => !v)}
+              aria-label="Pilih layer peta"
+              aria-expanded={isLayerMenuOpen}
+              title={`Layer Peta (${providerLabel})`}
+              className={`w-10 h-10 rounded-xl backdrop-blur-md shadow-md border transition-all flex items-center justify-center cursor-pointer ${
+                isLayerMenuOpen
+                  ? 'bg-emerald-600/95 text-white border-emerald-500'
+                  : 'bg-white/90 hover:bg-white text-slate-700 border-slate-200/80'
+              }`}
+            >
+              <Layers className="w-4 h-4" />
+            </button>
+
+            {isLayerMenuOpen && (
+              <div
+                role="menu"
+                aria-label="Pilihan layer peta"
+                className="absolute top-0 right-12 w-36 bg-white/95 backdrop-blur-md rounded-xl shadow-xl border border-slate-200/90 p-1.5 flex flex-col gap-0.5 z-[1010]"
+              >
+                {MAP_MODE_OPTIONS.map((opt) => {
+                  const isSelected = mapMode === opt.mode;
+                  return (
+                    <button
+                      key={opt.mode}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={isSelected}
+                      onClick={() => {
+                        setMapMode(opt.mode);
+                        setIsLayerMenuOpen(false);
+                      }}
+                      className={`px-2.5 py-1.5 rounded-lg text-xs font-bold text-left flex items-center justify-between transition-colors cursor-pointer ${
+                        isSelected
+                          ? 'bg-emerald-600 text-white'
+                          : 'text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      <span>{opt.label}</span>
+                      {isSelected && <Check className="w-3.5 h-3.5 shrink-0" />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
-          {metrics ? (
-            <div className="grid grid-cols-2 gap-2 pt-1 text-[11px] border-t border-slate-800">
-              <div>
-                <span className="text-slate-400 block text-[10px]">Luas (Shoelace)</span>
-                <strong className="text-emerald-300 font-bold">
-                  {metrics.formattedAreaHectares}
-                </strong>
-                <span className="text-[10px] text-slate-400 block">
-                  {metrics.formattedAreaSqM}
+
+          {/* 2. Batas Tersimpan Toggle */}
+          <button
+            type="button"
+            onClick={() => setShowSavedLayer((v) => !v)}
+            aria-label="Toggle batas tersimpan"
+            aria-pressed={showSavedLayer}
+            title={showSavedLayer ? 'Sembunyikan Batas Tersimpan' : 'Tampilkan Batas Tersimpan'}
+            className={`w-10 h-10 rounded-xl backdrop-blur-md shadow-md border transition-all flex items-center justify-center cursor-pointer ${
+              showSavedLayer
+                ? 'bg-pink-600/90 hover:bg-pink-600 text-white border-pink-500'
+                : 'bg-white/85 hover:bg-white text-slate-400 hover:text-slate-700 border-slate-200/80'
+            }`}
+          >
+            <Pentagon className="w-4 h-4" />
+          </button>
+
+          {/* 3. Dusun Toggle */}
+          <button
+            type="button"
+            onClick={() => setShowDusunLayer((v) => !v)}
+            aria-label="Toggle batas dusun"
+            aria-pressed={showDusunLayer}
+            title={showDusunLayer ? 'Sembunyikan Batas Dusun' : 'Tampilkan Batas Dusun'}
+            className={`w-10 h-10 rounded-xl backdrop-blur-md shadow-md border transition-all flex items-center justify-center cursor-pointer ${
+              showDusunLayer
+                ? 'bg-emerald-600/90 hover:bg-emerald-600 text-white border-emerald-500'
+                : 'bg-white/85 hover:bg-white text-slate-400 hover:text-slate-700 border-slate-200/80'
+            }`}
+          >
+            <LayoutGrid className="w-4 h-4" />
+          </button>
+
+          {/* 4. Fasilitas Toggle */}
+          <button
+            type="button"
+            onClick={() => setShowFacilityLayer((v) => !v)}
+            aria-label="Toggle pin fasilitas"
+            aria-pressed={showFacilityLayer}
+            title={showFacilityLayer ? 'Sembunyikan Pin Fasilitas' : 'Tampilkan Pin Fasilitas'}
+            className={`w-10 h-10 rounded-xl backdrop-blur-md shadow-md border transition-all flex items-center justify-center cursor-pointer ${
+              showFacilityLayer
+                ? 'bg-sky-600/90 hover:bg-sky-600 text-white border-sky-500'
+                : 'bg-white/85 hover:bg-white text-slate-400 hover:text-slate-700 border-slate-200/80'
+            }`}
+          >
+            <MapPin className="w-4 h-4" />
+          </button>
+
+          {/* 5. Label Wilayah Toggle (hidden by default) */}
+          <button
+            type="button"
+            onClick={() => setShowLabels((v) => !v)}
+            aria-label="Toggle label nama wilayah"
+            aria-pressed={showLabels}
+            title={showLabels ? 'Sembunyikan Label Wilayah' : 'Tampilkan Label Wilayah'}
+            className={`w-10 h-10 rounded-xl backdrop-blur-md shadow-md border transition-all flex items-center justify-center cursor-pointer ${
+              showLabels
+                ? 'bg-amber-600/90 hover:bg-amber-600 text-white border-amber-500'
+                : 'bg-white/85 hover:bg-white text-slate-400 hover:text-slate-700 border-slate-200/80'
+            }`}
+          >
+            <Tag className="w-4 h-4" />
+          </button>
+
+          {/* 6. Perbesar / Kecilkan Layar */}
+          <button
+            type="button"
+            onClick={toggleFullscreen}
+            aria-label={isFullscreen ? 'Kecilkan peta' : 'Perbesar peta'}
+            aria-pressed={isFullscreen}
+            title={isFullscreen ? 'Kecilkan Peta (ESC)' : 'Perbesar Peta ke Layar Penuh'}
+            className={`w-10 h-10 rounded-xl backdrop-blur-md shadow-md border transition-all flex items-center justify-center cursor-pointer ${
+              isFullscreen
+                ? 'bg-emerald-600/95 hover:bg-emerald-600 text-white border-emerald-500'
+                : 'bg-white/90 hover:bg-white text-slate-700 border-slate-200/80'
+            }`}
+          >
+            {isFullscreen ? (
+              <Minimize2 className="w-4 h-4" />
+            ) : (
+              <Maximize2 className="w-4 h-4 text-emerald-700" />
+            )}
+          </button>
+        </div>
+
+        {/* Bottom-Left Info Icon Button + Closable Geometry Popup (never blocks map permanently) */}
+        <div className="absolute bottom-3 left-3 z-[1000] flex flex-col items-start gap-2">
+          {showMetricsPopup && (
+            <div
+              role="dialog"
+              aria-label="Informasi pratinjau poligon batas"
+              className="bg-slate-900/95 backdrop-blur-md text-white px-3 py-2.5 rounded-2xl shadow-xl border border-slate-700/80 w-64 space-y-1.5"
+            >
+              <div className="flex items-center justify-between gap-2 text-[11px]">
+                <span className="font-bold text-emerald-400 flex items-center gap-1">
+                  <Compass className="w-3.5 h-3.5 shrink-0" />
+                  {isEditing ? 'Mode Edit Aktif' : 'Pratinjau Poligon Batas'}
                 </span>
+                <div className="flex items-center gap-1.5">
+                  <span className="px-2 py-0.5 rounded-md bg-slate-800 text-slate-200 font-mono text-[10px]">
+                    {points.length} titik
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowMetricsPopup(false)}
+                    aria-label="Tutup info poligon"
+                    title="Tutup"
+                    className="p-0.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
-              <div>
-                <span className="text-slate-400 block text-[10px]">Keliling (Haversine)</span>
-                <strong className="text-emerald-300 font-bold">
-                  {metrics.perimeterMeters.toLocaleString('id-ID')} m
-                </strong>
-              </div>
+              {metrics ? (
+                <div className="grid grid-cols-2 gap-2 pt-1.5 text-[11px] border-t border-slate-800">
+                  <div>
+                    <span className="text-slate-400 block text-[10px]">Luas (Shoelace)</span>
+                    <strong className="text-emerald-300 font-bold">
+                      {metrics.formattedAreaHectares}
+                    </strong>
+                    <span className="text-[10px] text-slate-400 block">
+                      {metrics.formattedAreaSqM}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px]">Keliling (Haversine)</span>
+                    <strong className="text-emerald-300 font-bold">
+                      {metrics.perimeterMeters.toLocaleString('id-ID')} m
+                    </strong>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-[10px] text-amber-300 leading-relaxed pt-1 border-t border-slate-800">
+                  {isEditing
+                    ? 'Klik minimal 3 titik pada peta atau impor file GeoJSON batas desa.'
+                    : 'Belum ada poligon aktif di editor. Klik ikon edit di atas atau impor GeoJSON.'}
+                </p>
+              )}
             </div>
-          ) : (
-            <p className="text-[10px] text-amber-300">
-              {isEditing
-                ? 'Klik minimal 3 titik pada peta atau impor file GeoJSON batas desa.'
-                : 'Belum ada poligon aktif di editor. Klik "Aktifkan Edit / Digitasi" atau impor GeoJSON.'}
-            </p>
           )}
+
+          <button
+            type="button"
+            onClick={() => setShowMetricsPopup((v) => !v)}
+            aria-label="Info pratinjau poligon batas"
+            aria-expanded={showMetricsPopup}
+            title={
+              showMetricsPopup
+                ? 'Tutup Info Poligon Batas'
+                : 'Lihat Info Poligon (Titik, Luas, Keliling)'
+            }
+            className={`w-10 h-10 rounded-xl backdrop-blur-md shadow-md border transition-all flex items-center justify-center cursor-pointer ${
+              showMetricsPopup
+                ? 'bg-slate-900/95 text-emerald-400 border-slate-700'
+                : 'bg-white/90 hover:bg-white text-slate-700 border-slate-200/80'
+            }`}
+          >
+            <Info className="w-4 h-4" />
+          </button>
         </div>
       </div>
     </div>
   );
 };
+

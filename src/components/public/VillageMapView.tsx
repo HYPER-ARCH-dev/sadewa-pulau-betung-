@@ -5,6 +5,8 @@ import { MapMode } from '../../types/webgis';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { MarkerClusterGroup } from 'leaflet.markercluster';
+import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
 import {
   attachBasemapToLeaflet,
   MAP_MODE_OPTIONS
@@ -35,8 +37,50 @@ import {
   Clock,
   Maximize2,
   Minimize2,
-  X
+  X,
+  Pentagon,
+  Hexagon,
+  Crosshair,
+  Check
 } from 'lucide-react';
+
+const PUB_MAP_SESSION_KEYS = {
+  mapMode: 'sadewa_pub_map_mode',
+  showBoundary: 'sadewa_pub_show_boundary',
+  showNeighbor: 'sadewa_pub_show_neighbor',
+  showFacilities: 'sadewa_pub_show_facilities'
+} as const;
+
+function readSessionBool(key: string, fallback: boolean): boolean {
+  try {
+    const raw = window.sessionStorage.getItem(key);
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+  } catch {
+    // Ignore storage access errors
+  }
+  return fallback;
+}
+
+function readSessionMapMode(fallback: MapMode): MapMode {
+  try {
+    const raw = window.sessionStorage.getItem(PUB_MAP_SESSION_KEYS.mapMode);
+    if (raw === 'roadmap' || raw === 'satellite' || raw === 'hybrid' || raw === 'terrain') {
+      return raw;
+    }
+  } catch {
+    // Ignore storage access errors
+  }
+  return fallback;
+}
+
+function writeSessionValue(key: string, value: string): void {
+  try {
+    window.sessionStorage.setItem(key, value);
+  } catch {
+    // Ignore storage access errors
+  }
+}
 
 const MAP_CATEGORIES = [
   { key: 'all', label: 'Semua Fasilitas', color: '#047857' },
@@ -135,15 +179,37 @@ export const VillageMapView: React.FC = () => {
   const { facilities, villageProfile, webGisData, gisBootstrap, navigateTo, addToast } = useApp();
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [viewMode, setViewMode] = useState<'interactive' | 'grid'>('interactive');
-  const [mapMode, setMapMode] = useState<MapMode>(
-    gisBootstrap?.config?.defaultMapMode || 'roadmap'
+  const [mapMode, setMapMode] = useState<MapMode>(() =>
+    readSessionMapMode(gisBootstrap?.config?.defaultMapMode || 'roadmap')
   );
-  const [showBoundary, setShowBoundary] = useState<boolean>(
-    gisBootstrap?.config?.showVillageBoundary ?? true
+  const [showBoundary, setShowBoundary] = useState<boolean>(() =>
+    readSessionBool(PUB_MAP_SESSION_KEYS.showBoundary, gisBootstrap?.config?.showVillageBoundary ?? true)
   );
-  const [showNeighborBounds, setShowNeighborBounds] = useState<boolean>(true);
+  const [showNeighborBounds, setShowNeighborBounds] = useState<boolean>(() =>
+    readSessionBool(PUB_MAP_SESSION_KEYS.showNeighbor, true)
+  );
+  const [showFacilities, setShowFacilities] = useState<boolean>(() =>
+    readSessionBool(PUB_MAP_SESSION_KEYS.showFacilities, true)
+  );
+  const [isLayerMenuOpen, setIsLayerMenuOpen] = useState<boolean>(false);
   const [providerNotice, setProviderNotice] = useState<string | null>(null);
   const [providerLabel, setProviderLabel] = useState<string>('Peta Jalan');
+
+  useEffect(() => {
+    writeSessionValue(PUB_MAP_SESSION_KEYS.mapMode, mapMode);
+  }, [mapMode]);
+
+  useEffect(() => {
+    writeSessionValue(PUB_MAP_SESSION_KEYS.showBoundary, String(showBoundary));
+  }, [showBoundary]);
+
+  useEffect(() => {
+    writeSessionValue(PUB_MAP_SESSION_KEYS.showNeighbor, String(showNeighborBounds));
+  }, [showNeighborBounds]);
+
+  useEffect(() => {
+    writeSessionValue(PUB_MAP_SESSION_KEYS.showFacilities, String(showFacilities));
+  }, [showFacilities]);
 
   const safeFacilities = useMemo(
     () => (facilities || []).filter((f) => f.isActive !== false),
@@ -221,11 +287,21 @@ export const VillageMapView: React.FC = () => {
   }, [activeFacility, safeFacilities]);
 
   useEffect(() => {
-    if (gisBootstrap?.config?.defaultMapMode) {
-      setMapMode(gisBootstrap.config.defaultMapMode);
-    }
-    if (typeof gisBootstrap?.config?.showVillageBoundary === 'boolean') {
-      setShowBoundary(gisBootstrap.config.showVillageBoundary);
+    try {
+      if (
+        gisBootstrap?.config?.defaultMapMode &&
+        window.sessionStorage.getItem(PUB_MAP_SESSION_KEYS.mapMode) === null
+      ) {
+        setMapMode(gisBootstrap.config.defaultMapMode);
+      }
+      if (
+        typeof gisBootstrap?.config?.showVillageBoundary === 'boolean' &&
+        window.sessionStorage.getItem(PUB_MAP_SESSION_KEYS.showBoundary) === null
+      ) {
+        setShowBoundary(gisBootstrap.config.showVillageBoundary);
+      }
+    } catch {
+      // Ignore storage access errors
     }
   }, [gisBootstrap?.config?.defaultMapMode, gisBootstrap?.config?.showVillageBoundary]);
 
@@ -234,11 +310,31 @@ export const VillageMapView: React.FC = () => {
   const leafletMapRef = useRef<L.Map | null>(null);
   const basemapCleanupRef = useRef<(() => void) | null>(null);
   const overlayLayerRef = useRef<L.LayerGroup | null>(null);
+  const markerClusterRef = useRef<MarkerClusterGroup | null>(null);
+  const layerMenuContainerRef = useRef<HTMLDivElement>(null);
   const markersRef = useRef<{ [id: string]: L.Marker | L.Polygon }>({});
   const lastViewportKeyRef = useRef<string>('');
   const nativeFullscreenActiveRef = useRef<boolean>(false);
 
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    if (!isLayerMenuOpen) return;
+    const handleOutside = (e: MouseEvent | TouchEvent) => {
+      if (
+        layerMenuContainerRef.current &&
+        !layerMenuContainerRef.current.contains(e.target as Node)
+      ) {
+        setIsLayerMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('touchstart', handleOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('touchstart', handleOutside);
+    };
+  }, [isLayerMenuOpen]);
 
   const enterFullscreen = useCallback(async () => {
     setIsFullscreen(true);
@@ -347,11 +443,23 @@ export const VillageMapView: React.FC = () => {
       const map = L.map(mapContainerRef.current, {
         center: viewport.center,
         zoom: viewport.zoom,
+        minZoom: 1,
+        maxZoom: 19,
         zoomControl: true,
         scrollWheelZoom: true
       });
       leafletMapRef.current = map;
       overlayLayerRef.current = L.layerGroup().addTo(map);
+      const clusterGroup = new MarkerClusterGroup({
+        maxClusterRadius: 42,
+        spiderfyOnMaxZoom: true,
+        showCoverageOnHover: false,
+        zoomToBoundsOnClick: true,
+        disableClusteringAtZoom: 17
+      });
+      map.addLayer(clusterGroup as unknown as L.Layer);
+      markerClusterRef.current = clusterGroup;
+      map.on('click', () => setIsLayerMenuOpen(false));
     }
 
     const map = leafletMapRef.current;
@@ -397,6 +505,7 @@ export const VillageMapView: React.FC = () => {
       leafletMapRef.current.remove();
       leafletMapRef.current = null;
       overlayLayerRef.current = null;
+      markerClusterRef.current = null;
       lastViewportKeyRef.current = '';
     }
   }, [viewMode]);
@@ -411,6 +520,7 @@ export const VillageMapView: React.FC = () => {
         leafletMapRef.current.remove();
         leafletMapRef.current = null;
         overlayLayerRef.current = null;
+        markerClusterRef.current = null;
       }
     };
   }, []);
@@ -431,16 +541,20 @@ export const VillageMapView: React.FC = () => {
     }
   }, [viewport, viewMode]);
 
-  // Render marker fasilitas, persil SPORADIK, dan garis batas wilayah desa
+  // Render marker fasilitas (clustered), persil SPORADIK, dan garis batas wilayah desa
   useEffect(() => {
     const map = leafletMapRef.current;
     const overlayGroup = overlayLayerRef.current;
+    const clusterGroup = markerClusterRef.current;
     if (viewMode !== 'interactive' || !map || !overlayGroup) return;
 
     overlayGroup.clearLayers();
+    if (clusterGroup) {
+      clusterGroup.clearLayers();
+    }
     markersRef.current = {};
 
-    // 1. Render batas wilayah desa utama & desa sebelah (jika ada & diaktifkan)
+    // 1. Render batas wilayah desa utama & batas wilayah sekitar (jika ada & diaktifkan)
     visibleBoundaryList.forEach((boundary) => {
       if (!boundary.geometryGeoJson) return;
       const isNeighbor = boundary.boundaryRole === 'NEIGHBOR_VILLAGE';
@@ -454,7 +568,7 @@ export const VillageMapView: React.FC = () => {
       const displayName =
         boundary.villageName ||
         boundary.sourceName ||
-        (isNeighbor ? 'Desa Tetangga' : villageProfile.villageName || 'Desa');
+        (isNeighbor ? 'Batas Wilayah' : villageProfile.villageName || 'Desa');
 
       polygons.forEach((rings, ringIdx) => {
         const boundaryLayer = L.polygon(rings, {
@@ -473,33 +587,45 @@ export const VillageMapView: React.FC = () => {
           if (calc.areaHectares > 0) ringAreaStr = calc.formattedAreaHectares;
         }
 
-        // Tooltip interaktif saat di-hover / di-klik (hanya muncul saat interaksi, tidak menutupi peta secara permanen)
-        const hoverTip = document.createElement('div');
-        hoverTip.className = 'font-sans text-xs text-slate-800 p-1';
-        const tipTitle = document.createElement('strong');
-        tipTitle.className = 'block text-xs font-bold text-slate-900';
-        tipTitle.textContent = displayName;
-        hoverTip.appendChild(tipTitle);
+        const buildTipEl = () => {
+          const tip = document.createElement('div');
+          tip.className = 'font-sans text-xs text-slate-800 p-1';
+          const tipTitle = document.createElement('strong');
+          tipTitle.className = 'block text-xs font-bold text-slate-900';
+          tipTitle.textContent = displayName;
+          tip.appendChild(tipTitle);
 
-        if (ringAreaStr) {
-          const areaDiv = document.createElement('div');
-          areaDiv.className = 'text-[11px] font-semibold text-emerald-700 mt-0.5';
-          areaDiv.textContent = `Luas Wilayah: ${ringAreaStr}`;
-          hoverTip.appendChild(areaDiv);
-        }
+          if (ringAreaStr) {
+            const areaDiv = document.createElement('div');
+            areaDiv.className = 'text-[11px] font-semibold text-emerald-700 mt-0.5';
+            areaDiv.textContent = `Luas Wilayah: ${ringAreaStr}`;
+            tip.appendChild(areaDiv);
+          }
 
-        const tipStatus = document.createElement('div');
-        tipStatus.className = 'text-[10px] text-slate-500 mt-0.5';
-        tipStatus.textContent = `Status: ${boundary.status === 'TERVERIFIKASI' ? 'Terverifikasi' : 'Belum Terverifikasi'}`;
-        hoverTip.appendChild(tipStatus);
+          const tipStatus = document.createElement('div');
+          tipStatus.className = 'text-[10px] text-slate-500 mt-0.5';
+          tipStatus.textContent = `Status: ${boundary.status === 'TERVERIFIKASI' ? 'Terverifikasi' : 'Belum Terverifikasi'}`;
+          tip.appendChild(tipStatus);
+          return tip;
+        };
 
-        boundaryLayer.bindTooltip(hoverTip, { sticky: true });
+        boundaryLayer.bindTooltip(buildTipEl(), { sticky: true });
+        boundaryLayer.bindPopup(buildTipEl());
 
         // Label teks luas di peta: TANPA kontainer kotak (transparan, tidak menghalangi peta atau fasilitas)
         if (ringIdx === 0 && ringAreaStr) {
           const cleanLabelEl = document.createElement('div');
           cleanLabelEl.className = 'gis-boundary-clean-label';
-          cleanLabelEl.innerHTML = `<span style="font-weight: 800; font-size: 11px; color: ${boundaryColor}; text-shadow: 0 0 3px #ffffff, 0 0 6px #ffffff, 0 0 9px #ffffff, 1px 1px 0 #ffffff, -1px -1px 0 #ffffff; white-space: nowrap; pointer-events: none;">Luas: ${ringAreaStr}</span>`;
+          const spanEl = document.createElement('span');
+          spanEl.style.fontWeight = '800';
+          spanEl.style.fontSize = '11px';
+          spanEl.style.color = boundaryColor;
+          spanEl.style.textShadow =
+            '0 0 3px #ffffff, 0 0 6px #ffffff, 0 0 9px #ffffff, 1px 1px 0 #ffffff, -1px -1px 0 #ffffff';
+          spanEl.style.whiteSpace = 'nowrap';
+          spanEl.style.pointerEvents = 'none';
+          spanEl.textContent = `Luas: ${ringAreaStr}`;
+          cleanLabelEl.appendChild(spanEl);
 
           boundaryLayer.bindTooltip(cleanLabelEl, {
             permanent: true,
@@ -513,45 +639,55 @@ export const VillageMapView: React.FC = () => {
       });
     });
 
-    // 2. Render pin fasilitas umum (dengan display-only offset untuk titik bertumpuk)
-    const offsetMarkers = applyDisplayOverlapOffsets(filtered);
-    offsetMarkers.forEach(({ item: facility, lat, lng, displayLat, displayLng }) => {
-      const catConfig = MAP_CATEGORIES.find((c) => c.key === facility.category) || { color: '#047857' };
-      const safeTitle = escapeHtml(facility.name);
+    // 2. Render pin fasilitas umum dengan MarkerClusterGroup (jika toggle Fasilitas aktif)
+    if (showFacilities) {
+      const offsetMarkers = applyDisplayOverlapOffsets(filtered);
+      const facilityMarkers: L.Marker[] = [];
 
-      const markerIcon = L.divIcon({
-        className: 'custom-div-marker',
-        html: `
-          <div style="
-            background-color: ${catConfig.color};
-            color: white;
-            width: 30px;
-            height: 30px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border: 2px solid #ffffff;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-            cursor: pointer;
-          " title="${safeTitle}">
-            <span style="width:10px;height:10px;border-radius:9999px;background:#ffffff;display:block;"></span>
-          </div>
-        `,
-        iconSize: [30, 30],
-        iconAnchor: [15, 15],
-        popupAnchor: [0, -16]
+      offsetMarkers.forEach(({ item: facility, lat, lng, displayLat, displayLng }) => {
+        const catConfig = MAP_CATEGORIES.find((c) => c.key === facility.category) || { color: '#047857' };
+        const safeTitle = escapeHtml(facility.name);
+
+        const markerIcon = L.divIcon({
+          className: 'custom-div-marker',
+          html: `
+            <div style="
+              background-color: ${catConfig.color};
+              color: white;
+              width: 30px;
+              height: 30px;
+              border-radius: 50%;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              border: 2px solid #ffffff;
+              box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+              cursor: pointer;
+            " title="${safeTitle}">
+              <span style="width:10px;height:10px;border-radius:9999px;background:#ffffff;display:block;"></span>
+            </div>
+          `,
+          iconSize: [30, 30],
+          iconAnchor: [15, 15],
+          popupAnchor: [0, -16]
+        });
+
+        const marker = L.marker([displayLat, displayLng], { icon: markerIcon });
+        marker.bindPopup(buildFacilityPopupElement(facility, lat, lng));
+        marker.on('click', () => {
+          setActiveFacility(facility);
+        });
+
+        markersRef.current[facility.id] = marker;
+        facilityMarkers.push(marker);
       });
 
-      const marker = L.marker([displayLat, displayLng], { icon: markerIcon });
-      marker.bindPopup(buildFacilityPopupElement(facility, lat, lng));
-      marker.on('click', () => {
-        setActiveFacility(facility);
-      });
-
-      overlayGroup.addLayer(marker);
-      markersRef.current[facility.id] = marker;
-    });
+      if (clusterGroup) {
+        clusterGroup.addLayers(facilityMarkers);
+      } else {
+        facilityMarkers.forEach((m) => overlayGroup.addLayer(m));
+      }
+    }
 
     // 3. Render persil SPORADIK terbit (hanya saat filter semua)
     if (selectedCategory === 'all' && webGisData && webGisData.length > 0) {
@@ -632,6 +768,7 @@ export const VillageMapView: React.FC = () => {
     addToast,
     showBoundary,
     showNeighborBounds,
+    showFacilities,
     visibleBoundaryList,
     gisBootstrap?.config?.boundaryColor,
     villageProfile.villageName
@@ -639,16 +776,25 @@ export const VillageMapView: React.FC = () => {
 
   const handleSelectFacility = (facility: FacilityPoint) => {
     setActiveFacility(facility);
+    if (!showFacilities) {
+      setShowFacilities(true);
+    }
     const validPair = normalizeCoordinatePair(facility.coordinates);
     if (viewMode === 'interactive' && leafletMapRef.current && validPair) {
       const marker = markersRef.current[facility.id];
-      const targetLatLng =
-        marker && 'getLatLng' in marker
-          ? marker.getLatLng()
-          : L.latLng(validPair[0], validPair[1]);
-      leafletMapRef.current.flyTo(targetLatLng, 16, { duration: 1.0 });
-      if (marker) {
-        marker.openPopup();
+      if (marker && markerClusterRef.current && marker instanceof L.Marker) {
+        markerClusterRef.current.zoomToShowLayer(marker, () => {
+          marker.openPopup();
+        });
+      } else {
+        const targetLatLng =
+          marker && 'getLatLng' in marker
+            ? marker.getLatLng()
+            : L.latLng(validPair[0], validPair[1]);
+        leafletMapRef.current.flyTo(targetLatLng, 16, { duration: 1.0 });
+        if (marker) {
+          marker.openPopup();
+        }
       }
     }
   };
@@ -782,92 +928,7 @@ export const VillageMapView: React.FC = () => {
                   : 'bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm relative flex flex-col'
               }
             >
-              {/* Map Bar Header */}
-              <div className="px-4 sm:px-5 py-3 bg-slate-900 text-white flex flex-wrap items-center justify-between gap-2 shrink-0 z-20">
-                <div className="flex items-center space-x-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
-                  <span className="text-xs font-bold text-emerald-300 uppercase tracking-wider">
-                    {providerLabel} • {villageDisplayName}
-                  </span>
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-                  <div className="flex items-center bg-slate-800 rounded-lg p-0.5 border border-slate-700">
-                    {MAP_MODE_OPTIONS.map((opt) => (
-                      <button
-                        key={opt.mode}
-                        type="button"
-                        onClick={() => setMapMode(opt.mode)}
-                        className={`px-2.5 py-1 rounded-md text-[10px] font-bold transition-colors cursor-pointer ${
-                          mapMode === opt.mode
-                            ? 'bg-emerald-600 text-white'
-                            : 'text-slate-300 hover:text-white'
-                        }`}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
-                  </div>
-                  {hasMainBoundary && (
-                    <button
-                      type="button"
-                      onClick={() => setShowBoundary((v) => !v)}
-                      className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition-colors flex items-center gap-1 ${
-                        showBoundary
-                          ? 'bg-pink-600/20 text-pink-200 border-pink-400/50'
-                          : 'bg-slate-800 text-slate-300 border-slate-700'
-                      }`}
-                    >
-                      <Layers className="w-3 h-3" />
-                      <span>Batas Desa</span>
-                    </button>
-                  )}
-                  {hasNeighborBoundary && (
-                    <button
-                      type="button"
-                      onClick={() => setShowNeighborBounds((v) => !v)}
-                      className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition-colors flex items-center gap-1 ${
-                        showNeighborBounds
-                          ? 'bg-sky-600/25 text-sky-200 border-sky-400/50'
-                          : 'bg-slate-800 text-slate-300 border-slate-700'
-                      }`}
-                    >
-                      <Layers className="w-3 h-3" />
-                      <span>{neighborAreaFormatted ? `Batas (${neighborAreaFormatted})` : 'Batas Wilayah'}</span>
-                    </button>
-                  )}
-
-                  <button
-                    type="button"
-                    onClick={handleRecenter}
-                    className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center gap-1"
-                    title="Pusatkan Ulang Peta"
-                  >
-                    <Navigation className="w-3 h-3 text-emerald-400" />
-                    <span>Pusatkan</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={toggleFullscreen}
-                    className="px-3 py-1 rounded-lg text-[10px] font-extrabold bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-500 flex items-center gap-1 shadow-sm"
-                    title={isFullscreen ? 'Kecilkan Peta (ESC)' : 'Perbesar Peta ke Layar Penuh'}
-                  >
-                    {isFullscreen ? (
-                      <>
-                        <Minimize2 className="w-3.5 h-3.5" />
-                        <span>Kecilkan</span>
-                      </>
-                    ) : (
-                      <>
-                        <Maximize2 className="w-3.5 h-3.5" />
-                        <span>Perbesar</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              {/* Leaflet container wrapper */}
+              {/* Leaflet container wrapper with unified floating vertical icon controls (top-right) */}
               <div className="relative w-full z-0 flex-1">
                 <div
                   ref={mapContainerRef}
@@ -875,42 +936,172 @@ export const VillageMapView: React.FC = () => {
                   className="w-full z-0"
                 />
 
-                {/* Floating Fullscreen Button on Bottom-Right of Map Canvas */}
-                <div className="absolute bottom-12 right-3 z-[1000]">
+                {/* Vertical Floating Icon Controls (Top-Right, 40x40px semi-transparent) */}
+                <div
+                  ref={layerMenuContainerRef}
+                  className="absolute top-3 right-3 z-[1000] flex flex-col items-end gap-1.5"
+                >
+                  {/* 1. Layer Peta + Popover Menu */}
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setIsLayerMenuOpen((v) => !v)}
+                      aria-label="Pilih layer peta"
+                      aria-expanded={isLayerMenuOpen}
+                      title={`Layer Peta (${providerLabel})`}
+                      className={`w-10 h-10 rounded-xl backdrop-blur-md shadow-md border transition-all flex items-center justify-center cursor-pointer ${
+                        isLayerMenuOpen
+                          ? 'bg-emerald-600/95 text-white border-emerald-500'
+                          : 'bg-white/90 hover:bg-white text-slate-700 border-slate-200/80'
+                      }`}
+                    >
+                      <Layers className="w-4 h-4" />
+                    </button>
+
+                    {isLayerMenuOpen && (
+                      <div
+                        role="menu"
+                        aria-label="Pilihan layer peta"
+                        className="absolute top-0 right-12 w-36 bg-white/95 backdrop-blur-md rounded-xl shadow-xl border border-slate-200/90 p-1.5 flex flex-col gap-0.5 z-[1010]"
+                      >
+                        {MAP_MODE_OPTIONS.map((opt) => {
+                          const isSelected = mapMode === opt.mode;
+                          return (
+                            <button
+                              key={opt.mode}
+                              type="button"
+                              role="menuitemradio"
+                              aria-checked={isSelected}
+                              onClick={() => {
+                                setMapMode(opt.mode);
+                                setIsLayerMenuOpen(false);
+                              }}
+                              className={`px-2.5 py-1.5 rounded-lg text-xs font-bold text-left flex items-center justify-between transition-colors cursor-pointer ${
+                                isSelected
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'text-slate-700 hover:bg-slate-100'
+                              }`}
+                            >
+                              <span>{opt.label}</span>
+                              {isSelected && <Check className="w-3.5 h-3.5 shrink-0" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 2. Batas Desa Toggle */}
+                  {hasMainBoundary && (
+                    <button
+                      type="button"
+                      onClick={() => setShowBoundary((v) => !v)}
+                      aria-label="Toggle batas desa"
+                      aria-pressed={showBoundary}
+                      title={showBoundary ? 'Sembunyikan Batas Desa' : 'Tampilkan Batas Desa'}
+                      className={`w-10 h-10 rounded-xl backdrop-blur-md shadow-md border transition-all flex items-center justify-center cursor-pointer ${
+                        showBoundary
+                          ? 'bg-pink-600/90 hover:bg-pink-600 text-white border-pink-500'
+                          : 'bg-white/85 hover:bg-white text-slate-400 hover:text-slate-700 border-slate-200/80'
+                      }`}
+                    >
+                      <Pentagon className="w-4 h-4" />
+                    </button>
+                  )}
+
+                  {/* 3. Batas Wilayah (293,9 Ha) Toggle - area shown only in tooltip/popup */}
+                  {hasNeighborBoundary && (
+                    <button
+                      type="button"
+                      onClick={() => setShowNeighborBounds((v) => !v)}
+                      aria-label="Toggle batas wilayah"
+                      aria-pressed={showNeighborBounds}
+                      title={
+                        neighborAreaFormatted
+                          ? `${showNeighborBounds ? 'Sembunyikan' : 'Tampilkan'} Batas Wilayah (${neighborAreaFormatted})`
+                          : showNeighborBounds
+                          ? 'Sembunyikan Batas Wilayah'
+                          : 'Tampilkan Batas Wilayah'
+                      }
+                      className={`w-10 h-10 rounded-xl backdrop-blur-md shadow-md border transition-all flex items-center justify-center cursor-pointer ${
+                        showNeighborBounds
+                          ? 'bg-sky-600/90 hover:bg-sky-600 text-white border-sky-500'
+                          : 'bg-white/85 hover:bg-white text-slate-400 hover:text-slate-700 border-slate-200/80'
+                      }`}
+                    >
+                      <Hexagon className="w-4 h-4" />
+                    </button>
+                  )}
+
+                  {/* 4. Fasilitas Toggle (hide/show all pins) */}
+                  <button
+                    type="button"
+                    onClick={() => setShowFacilities((v) => !v)}
+                    aria-label="Toggle semua pin fasilitas"
+                    aria-pressed={showFacilities}
+                    title={
+                      showFacilities
+                        ? 'Sembunyikan Semua Pin Fasilitas'
+                        : 'Tampilkan Semua Pin Fasilitas'
+                    }
+                    className={`w-10 h-10 rounded-xl backdrop-blur-md shadow-md border transition-all flex items-center justify-center cursor-pointer ${
+                      showFacilities
+                        ? 'bg-emerald-600/90 hover:bg-emerald-600 text-white border-emerald-500'
+                        : 'bg-white/85 hover:bg-white text-slate-400 hover:text-slate-700 border-slate-200/80'
+                    }`}
+                  >
+                    <MapPin className="w-4 h-4" />
+                  </button>
+
+                  {/* 5. Pusatkan Peta */}
+                  <button
+                    type="button"
+                    onClick={handleRecenter}
+                    aria-label="Pusatkan peta"
+                    title="Pusatkan Ulang Peta"
+                    className="w-10 h-10 rounded-xl bg-white/90 hover:bg-white text-slate-700 border border-slate-200/80 backdrop-blur-md shadow-md transition-all flex items-center justify-center cursor-pointer"
+                  >
+                    <Crosshair className="w-4 h-4 text-emerald-700" />
+                  </button>
+
+                  {/* 6. Perbesar / Kecilkan Layar */}
                   <button
                     type="button"
                     onClick={toggleFullscreen}
-                    className="px-3.5 py-2 bg-slate-900/95 hover:bg-slate-900 text-emerald-300 border border-emerald-500/60 rounded-xl shadow-xl transition-all flex items-center gap-1.5 text-xs font-extrabold backdrop-blur-md"
+                    aria-label={isFullscreen ? 'Kecilkan peta' : 'Perbesar peta'}
+                    aria-pressed={isFullscreen}
                     title={isFullscreen ? 'Kecilkan Peta (ESC)' : 'Perbesar Peta ke Layar Penuh'}
+                    className={`w-10 h-10 rounded-xl backdrop-blur-md shadow-md border transition-all flex items-center justify-center cursor-pointer ${
+                      isFullscreen
+                        ? 'bg-emerald-600/95 hover:bg-emerald-600 text-white border-emerald-500'
+                        : 'bg-white/90 hover:bg-white text-slate-700 border-slate-200/80'
+                    }`}
                   >
                     {isFullscreen ? (
-                      <>
-                        <Minimize2 className="w-4 h-4 text-emerald-400" />
-                        <span>Kecilkan</span>
-                      </>
+                      <Minimize2 className="w-4 h-4" />
                     ) : (
-                      <>
-                        <Maximize2 className="w-4 h-4 text-emerald-400" />
-                        <span>Perbesar Peta</span>
-                      </>
+                      <Maximize2 className="w-4 h-4 text-emerald-700" />
                     )}
                   </button>
                 </div>
               </div>
 
-              <div className="px-5 py-3 bg-slate-50 border-t border-slate-200 text-xs text-slate-600 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
-                <div className="flex items-center space-x-1.5 text-[11px] text-slate-500">
+              {/* Combined thin single-line footer */}
+              <div className="px-3.5 py-2 bg-slate-50 border-t border-slate-200 text-[11px] text-slate-600 flex items-center justify-between gap-2 shrink-0">
+                <div className="flex items-center gap-1.5 text-slate-500 min-w-0">
                   <Info className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
-                  <span>Klik pada pin untuk melihat informasi fasilitas dan petunjuk arah.</span>
+                  <span className="truncate">Klik pin untuk info &amp; petunjuk arah.</span>
                 </div>
                 <a
                   href={externalGoogleMapsHref}
                   target="_blank"
                   rel="noreferrer"
-                  className="text-emerald-700 font-bold hover:underline flex items-center space-x-1 text-xs"
+                  aria-label="Buka di Google Maps"
+                  title="Buka di Google Maps"
+                  className="text-emerald-700 font-bold hover:underline flex items-center gap-1 shrink-0"
                 >
-                  <span>Buka di Google Maps</span>
-                  <ExternalLink className="w-3 h-3" />
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Google Maps</span>
                 </a>
               </div>
             </div>
